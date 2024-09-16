@@ -1,0 +1,7 @@
+__pycache__/
+*.DS_store
+
+/slurm_out/
+/training_log*/
+/saved*/
+/data*/

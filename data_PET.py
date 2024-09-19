@@ -10,7 +10,7 @@ def to_np_float(x):
     return x.to_numpy().astype(float)
 
 # Resample sequences to match the largest bin size
-def resample_to_max_bin_size(sequence1, sequence2, hist1, hist2, bin_edges):
+def distribution_matching(sequence1, sequence2, hist1, hist2, bin_edges):
     resampled_sequence1 = []
     resampled_indices1 = []
     resampled_sequence2 = []
@@ -30,11 +30,31 @@ def resample_to_max_bin_size(sequence1, sequence2, hist1, hist2, bin_edges):
                 resampled_indices1.extend(indices)
     return np.array(resampled_indices1), np.array(resampled_indices2)
 
+# resample 500 for each bin
+def resample_to_n(sequence1, sequence2, hist1, hist2, bin_edges, n=600):
+    resampled_sequence1 = []
+    resampled_indices1 = []
+    resampled_sequence2 = []
+    resampled_indices2 = []
+    for count1, count2, (start, end) in zip(hist1, hist2, zip(bin_edges[:-1], bin_edges[1:])):
+        if count1 > 0 and count2 > 0:
+            bin_indices1 = np.where((sequence1 >= start) & (sequence1 < end))[0]
+            bin_indices2 = np.where((sequence2 >= start) & (sequence2 < end))[0]
+            
+            indices = np.random.choice(bin_indices2, n, replace=True)
+            resampled_sequence2.extend(sequence2[indices])
+            resampled_indices2.extend(indices)
+        
+            indices = np.random.choice(bin_indices1, n, replace=True)
+            resampled_sequence1.extend(sequence1[indices])
+            resampled_indices1.extend(indices)
+    return np.array(resampled_indices1), np.array(resampled_indices2)
+
 
 def read_data(numpy=True):
-    uPiB1_path = '/home/yche14/epi_cycleGAN/data_PET/AIBL_PIB_PUP.xlsx'
-    uPiB2_path = '/home/yche14/epi_cycleGAN/data_PET/OASIS_PIB_PUP.xlsx'
-    uFBP_path = '/home/yche14/epi_cycleGAN/data_PET/ALL-AV45-PUP-BAI-SUVR-11162023.xlsx'
+    uPiB1_path = '/home/yche14/PET_cycleGAN/data_PET/AIBL_PIB_PUP.xlsx'
+    uPiB2_path = '/home/yche14/PET_cycleGAN/data_PET/OASIS_PIB_PUP.xlsx'
+    uFBP_path = '/home/yche14/PET_cycleGAN/data_PET/ALL-AV45-PUP-BAI-SUVR-11162023.xlsx'
 
     pPiB_path = '/data/amciilab/processedDataset/Centiloid/FBP_PIB/PUP_PIB/runExtract/list_id_SUVR.csv'
     pFBP_path = '/data/amciilab/processedDataset/Centiloid/FBP_PIB/PUP_FBP/runExtract/list_id_SUVR.csv'
@@ -63,7 +83,7 @@ def read_data(numpy=True):
     names = []
     for i, name in enumerate(uFBP.columns):
         if len(uPiB[name].unique()) == 1:
-            print(i, name) 
+            # print(i, name) 
             names.append(name)
     
     uPiB = uPiB.drop(columns=names)
@@ -86,7 +106,7 @@ class PairedDataset(Dataset):
         return self.pFBP[idx], self.pPiB[idx]
     
 class UnpairedDataset(Dataset):
-    def __init__(self, uFBP, uPiB, uPiB_CL=None, uFBP_CL=None, resample=True):
+    def __init__(self, uFBP, uPiB, uPiB_CL=None, uFBP_CL=None, resample='matching'):
         self.uFBP = uFBP
         self.uPiB = uPiB
        
@@ -98,12 +118,20 @@ class UnpairedDataset(Dataset):
             hist1, bin_edges1 = np.histogram(uPiB_CL, bins=bins)
             hist2, _ = np.histogram(uFBP_CL, bins=bins)
             
-            idx_PiB, _ = resample_to_max_bin_size(uPiB_CL, uFBP_CL, hist1, hist2, bin_edges1)
+            assert self.resample in ['matching', 'resample_to_n']
             
-            # select the indices that are in both resampled sequences
-            self.resample_FBP = self.uFBP
-            resample_PiB = self.uPiB[idx_PiB]
-            self.resample_PiB = np.concatenate([self.uPiB, resample_PiB], axis=0)    
+            if self.resample == 'matching':
+                idx_PiB, idx_FBP = distribution_matching(uPiB_CL, uFBP_CL, hist1, hist2, bin_edges1)
+                # select the indices that are in both resampled sequences
+                self.resample_FBP = self.uFBP
+                resample_PiB = self.uPiB[idx_PiB]
+                self.resample_PiB = np.concatenate([self.uPiB, resample_PiB], axis=0) 
+            elif self.resample == 'resample_to_n':
+                idx_PiB, idx_FBP = resample_to_n(uPiB_CL, uFBP_CL, hist1, hist2, bin_edges1)
+                self.resample_FBP = self.uFBP[idx_FBP]
+                self.resample_PiB = self.uPiB[idx_PiB]
+            else:
+                raise ValueError('Invalid resample method')
         else:
             self.resample_FBP = self.uFBP
             self.resample_PiB = self.uPiB
@@ -111,8 +139,8 @@ class UnpairedDataset(Dataset):
         self.len = max(len(self.resample_FBP), len(self.resample_PiB))    
         self.len1 = len(self.resample_FBP)
         self.len2 = len(self.resample_PiB)
-        print(self.len1)
-        print(self.len2)
+        # print(self.len1)
+        # print(self.len2)
     
     def __len__(self):
         return self.len

@@ -1,5 +1,6 @@
 import argparse
 import os
+from pathlib import Path
 import numpy as np
 import math
 import itertools
@@ -10,6 +11,7 @@ from models import *
 from utils import *
 # from data import get_data_loaders, get_unpaired_blood
 from data_PET import get_data_loaders
+from MCSUVR import get_pID_df, cal_MCSUVR, tensor_to_df, cal_correlation
 
 import torch.nn as nn
 import torch.nn.functional as F
@@ -26,7 +28,7 @@ parser.add_argument("--lr", type=float, default=0.0002, help="adam: learning rat
 parser.add_argument("--b1", type=float, default=0.9, help="adamw: decay of first order momentum of gradient")
 parser.add_argument("--b2", type=float, default=0.999, help="adamw: decay of first order momentum of gradient")
 parser.add_argument("--decay_epoch", type=int, default=100, help="epoch from which to start lr decay")
-parser.add_argument("--sample_interval", type=int, default=200, help="interval between saving generator outputs")
+parser.add_argument("--sample_interval", type=int, default=10, help="interval between saving generator outputs")
 parser.add_argument("--checkpoint_interval", type=int, default=20, help="interval between saving model checkpoints")
 parser.add_argument("--lambda_cyc", type=float, default=10.0, help="cycle loss weight")
 parser.add_argument("--lambda_id", type=float, default=5.0, help="identity loss weight")
@@ -36,33 +38,74 @@ parser.add_argument("--generator_width", type=int, default=512, help="width of t
 parser.add_argument("--num_residual_blocks_generator", type=int, default=8, help="number of residual blocks in the generator")
 parser.add_argument("--discriminator_width", type=int, default=128, help="width of the discriminator")
 parser.add_argument("--num_residual_blocks_discriminator", type=int, default=2, help="number of residual blocks in the discriminator")
+parser.add_argument("--log_path", type=str, default='./training_logs3', help="path to save log file")
 opt = parser.parse_args()
 print(opt)
 
+# set random seed
+torch.manual_seed(0)
+np.random.seed(0)
 
+######################
+PPIB_RAW, PPIB_DF, PID = get_pID_df()
+######################
+
+
+def save_model(model_save_path, suffix):
+    torch.save(G_AB.state_dict(), model_save_path / f"G_AB_{suffix}.pth")
+    torch.save(G_BA.state_dict(), model_save_path / f"G_BA_{suffix}.pth")
+    torch.save(D_A.state_dict(), model_save_path / f"D_A_{suffix}.pth")
+    torch.save(D_B.state_dict(), model_save_path / f"D_B_{suffix}.pth")
+    
+def sample_images(val_dataloader):
+    """Saves a generated sample from the test set"""
+    paired = next(iter(val_dataloader))
+    assert paired[0].shape[0] == paired[1].shape[0] == 46
+    G_AB.eval()
+    G_BA.eval()
+    real_A = paired[0].to(device) # FBP
+    fake_B = G_AB(real_A) # Fake PiB
+    real_B = paired[1].to(device) # PiB
+    fake_A = G_BA(real_B) # Fake FBP
+    
+    fake_B_df = tensor_to_df(fake_B, PID, PPIB_DF)
+    REAL_MCSUVR, FAKE_MCSUVR = cal_MCSUVR(PPIB_RAW, fake_B_df)
+    cor = cal_correlation(REAL_MCSUVR, FAKE_MCSUVR)
+    
+    # calculate relative error
+    error_A = torch.mean(torch.abs(fake_A - real_A) / (real_A+1e-8)) 
+    error_B = torch.mean(torch.abs(fake_B - real_B) / (real_B+1e-8)) 
+    return error_A, error_B, cor, fake_A, fake_B
+
+# path
+log_path = Path(opt.log_path)
+training_setup = f'{opt.generator_width}_{opt.discriminator_width}_{opt.num_residual_blocks_generator}_{opt.num_residual_blocks_discriminator}_{opt.resample}_{opt.lambda_cyc}_{opt.lambda_id}'
+
+log_setup_path = log_path / 'log' / training_setup
+model_save_path = log_path / 'saved_model' / training_setup
+data_save_path = log_path / 'data' / training_setup
+if not log_setup_path.exists():
+    log_setup_path.mkdir(parents=True, exist_ok=True)
+if not model_save_path.exists():
+    model_save_path.mkdir(parents=True, exist_ok=True)
+if not data_save_path.exists():
+    data_save_path.mkdir(parents=True, exist_ok=True)
 
 # Create logger
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-
 # File handler
-file_handler = logging.FileHandler(f'./training_logs2/training_{opt.generator_width}_{opt.discriminator_width}_{opt.num_residual_blocks_generator}_{opt.num_residual_blocks_discriminator}_{opt.resample}.log')
+file_handler = logging.FileHandler(log_setup_path / "training.log")
 file_handler.setLevel(logging.INFO)
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-
 # Console handler
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-
 # Add handlers to the logger
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 logger.info('Training started')
-
-data_save_path = f'./training_logs2/training_{opt.generator_width}_{opt.discriminator_width}_{opt.num_residual_blocks_generator}_{opt.num_residual_blocks_discriminator}_{opt.resample}'
-if not os.path.exists(data_save_path):
-    os.makedirs(data_save_path)
     
 
 # Losses
@@ -87,13 +130,6 @@ D_A = D_A.to(device)
 D_B = D_B.to(device)
 
 
-if opt.epoch != 0:
-    # Load pretrained models
-    G_AB.load_state_dict(torch.load("saved_models/%s/G_AB_%d.pth" % (opt.dataset_name, opt.epoch)))
-    G_BA.load_state_dict(torch.load("saved_models/%s/G_BA_%d.pth" % (opt.dataset_name, opt.epoch)))
-    D_A.load_state_dict(torch.load("saved_models/%s/D_A_%d.pth" % (opt.dataset_name, opt.epoch)))
-    D_B.load_state_dict(torch.load("saved_models/%s/D_B_%d.pth" % (opt.dataset_name, opt.epoch)))
-
 # Optimizers
 optimizer_G = torch.optim.AdamW(
     itertools.chain(G_AB.parameters(), G_BA.parameters()), lr=opt.lr, betas=(opt.b1, opt.b2)
@@ -112,36 +148,20 @@ lr_scheduler_D_B = torch.optim.lr_scheduler.LambdaLR(
     optimizer_D_B, lr_lambda=LambdaLR(opt.n_epochs, opt.epoch, opt.decay_epoch).step
 )
 
-# data loader
-if opt.resample == 0:
-    val_dataloader, dataloader = get_data_loaders(128, 46, resample=False)
-else:
-    val_dataloader, dataloader = get_data_loaders(128, 46, resample=True)
-
-
-def sample_images(batches_done):
-    """Saves a generated sample from the test set"""
-    paired = next(iter(val_dataloader))
-    assert paired[0].shape[0] == paired[1].shape[0] == 46
-    G_AB.eval()
-    G_BA.eval()
-    real_A = paired[0].to(device) # FBP
-    fake_B = G_AB(real_A) # Fake PiB
-    real_B = paired[1].to(device) # PiB
-    fake_A = G_BA(real_B) # Fake FBP
-    # calculate relative error
-    error_A = torch.mean(torch.abs(fake_A - real_A) / (real_A+1e-8)) 
-    error_B = torch.mean(torch.abs(fake_B - real_B) / (real_B+1e-8)) 
-    return error_A, error_B, fake_A, fake_B
-
-    
 
 # ----------
 #  Training
 # ----------
-min_error_B = 1e10
-prev_time = time.time()
+max_cor = -1e8
+resample ={0:False, 1:'matching', 2:'resample_to_n'}
+
 for epoch in range(opt.epoch, opt.n_epochs):
+
+    # data loader
+    # resample for each epoch
+    val_dataloader, dataloader = get_data_loaders(128, 46, resample=resample[opt.resample])
+  
+    
     for i, batch in enumerate(dataloader):
 
         # Set model input
@@ -217,29 +237,32 @@ for epoch in range(opt.epoch, opt.n_epochs):
         # Determine approximate time left
         batches_done = epoch * len(dataloader) + i
         batches_left = opt.n_epochs * len(dataloader) - batches_done
-        time_left = datetime.timedelta(seconds=batches_left * (time.time() - prev_time))
-        prev_time = time.time()
+        # time_left = datetime.timedelta(seconds=batches_left * (time.time() - prev_time))
+        # prev_time = time.time()
 
         # If at sample interval save image
         if batches_done % opt.sample_interval == 0:
-            error_A, error_B, fake_A, fake_B = sample_images(batches_done)
-            if error_B < min_error_B:
-                min_error_B = error_B
+            error_A, error_B, cor, fake_A, fake_B = sample_images(val_dataloader)
+            if cor > max_cor:
+                max_cor = cor
+                cor_error_B = error_B
                 cor_error_A = error_A
                 # save tensors
-                torch.save(fake_B, f'./{data_save_path}/fake_B_{batches_done}_Best.pt')
-                torch.save(fake_A, f'./{data_save_path}/fake_A_{batches_done}_Best.pt')
+                torch.save(fake_B, f'./{data_save_path}/fake_B_Best.pt')
+                torch.save(fake_A, f'./{data_save_path}/fake_A_Best.pt')
+                # save model
+                save_model(model_save_path, 'Best')
                 
-            logger.info(f"Epoch: {epoch}, Batch: {i}, D loss: {loss_D.item():.4f}, G loss: {loss_G.item():.4f}, adv: {loss_GAN.item():.4f}, cycle: {loss_cycle.item():.4f}, identity: {loss_identity.item():.4f}, ETA: {time_left}, min_error_B: {min_error_B:.4f}, cor_error_A: {cor_error_A:.4f}")
+            logger.info(f"Epoch: {epoch}, Batch: {i}, D loss: {loss_D.item():.4f}, G loss: {loss_G.item():.4f}, adv: {loss_GAN.item():.4f}, cycle: {loss_cycle.item():.4f}, identity: {loss_identity.item():.4f}, cor_error_A: {cor_error_A:.4f}, cor_error_B: {cor_error_B:.4f},  max_cor: {max_cor:.4f}")
            
     # Update learning rates
     lr_scheduler_G.step()
     lr_scheduler_D_A.step()
     lr_scheduler_D_B.step()
 
-    if opt.checkpoint_interval != -1 and epoch % opt.checkpoint_interval == 0:
-        # Save model checkpoints
-        torch.save(G_AB.state_dict(), "./saved_models_PET/G_AB_%d.pth" % (epoch,))
-        torch.save(G_BA.state_dict(), "./saved_models_PET/G_BA_%d.pth" % (epoch,))
-        torch.save(D_A.state_dict(), "./saved_models_PET/D_A_%d.pth" % (epoch,))
-        torch.save(D_B.state_dict(), "./saved_models_PET/D_B_%d.pth" % (epoch,))
+    # if opt.checkpoint_interval != -1 and epoch % opt.checkpoint_interval == 0:
+    #     # Save model checkpoints
+    #     torch.save(G_AB.state_dict(), model_save_path / "/G_AB_%d.pth" % (epoch,))
+    #     torch.save(G_BA.state_dict(), model_save_path / "./saved_models_PET/G_BA_%d.pth" % (epoch,))
+    #     torch.save(D_A.state_dict(), model_save_path / "./saved_models_PET/D_A_%d.pth" % (epoch,))
+    #     torch.save(D_B.state_dict(), model_save_path / "./saved_models_PET/D_B_%d.pth" % (epoch,))

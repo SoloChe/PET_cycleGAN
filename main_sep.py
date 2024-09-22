@@ -33,8 +33,6 @@ parser.add_argument("--lambda_cyc", type=float, default=10.0, help="cycle loss w
 parser.add_argument("--lambda_id", type=float, default=5.0, help="identity loss weight")
 parser.add_argument("--lambda_mc", type=float, default=5.0, help="MCSUVR loss weight")
 
-parser.add_argument("--baseline", type=int, default=0, help="whether baseline model")
-
 parser.add_argument("--resample", type=int, default=0, help="resample unpaired data")
 parser.add_argument("--generator_width", type=int, default=512, help="width of the generator")
 parser.add_argument("--num_residual_blocks_generator", type=int, default=8, help="number of residual blocks in the generator")
@@ -49,7 +47,7 @@ torch.manual_seed(0)
 np.random.seed(0)
 
 ######################
-MCSUVR_WEIGHT, _, REGION_INDEX = load_weights()
+MCSUVR_WEIGHT, _, REGION_INDEX = load_weights(separate=True)
 ######################
 
 
@@ -76,8 +74,8 @@ def sample_images(val_dataloader, uPiB_scaler=None, uFBP_scaler=None):
         fake_A = torch.from_numpy(uFBP_scaler.inverse_transform(fake_A.cpu().detach().numpy()))
         fake_B = torch.from_numpy(uPiB_scaler.inverse_transform(fake_B.cpu().detach().numpy()))
    
-    REAL_MCSUVR = cal_MCSUVR_torch(real_B, REGION_INDEX, MCSUVR_WEIGHT)
-    FAKE_MCSUVR = cal_MCSUVR_torch(fake_B, REGION_INDEX, MCSUVR_WEIGHT)
+    REAL_MCSUVR = cal_MCSUVR_torch(real_B, REGION_INDEX, MCSUVR_WEIGHT, separate=True)
+    FAKE_MCSUVR = cal_MCSUVR_torch(fake_B, REGION_INDEX, MCSUVR_WEIGHT, separate=True)
     cor = cal_correlation(REAL_MCSUVR.cpu().detach().numpy(), FAKE_MCSUVR.cpu().detach().numpy())
     
     # calculate relative error
@@ -129,8 +127,8 @@ criterion_MCSUVR = torch.nn.MSELoss()
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = 'cpu'
 # input_shape = (opt.channels, opt.img_height, opt.img_width)
-input_dim = 85
-latent_dim = 85
+input_dim = 164
+latent_dim = 164
 # Initialize generator and discriminator
 G_AB = Generater_MLP_Skip(input_dim, opt.generator_width, latent_dim, opt.num_residual_blocks_generator)
 G_BA = Generater_MLP_Skip(input_dim, opt.generator_width, latent_dim, opt.num_residual_blocks_generator)   
@@ -161,10 +159,7 @@ lr_scheduler_D_B = torch.optim.lr_scheduler.LambdaLR(
 )
 
 # data
-baseline = True if opt.baseline == 1 else False
-opt.resample = 0 if opt.baseline == 1 else opt.resample # make sure resample is 0 for baseline model
-
-uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, uPiB_scaler, uFBP_scaler = read_data(normalize=False, separate=False, baseline=baseline)
+uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, uPiB_scaler, uFBP_scaler = read_data(normalize=False, separate=True)
 
 # ----------
 #  Training
@@ -217,29 +212,29 @@ for epoch in range(opt.epoch, opt.n_epochs):
         loss_cycle_B = criterion_cycle(recov_B, real_B)
         loss_cycle = (loss_cycle_A + loss_cycle_B) / 2
         
-        # MCSUVR loss
-        loss_cycle_B_39 = criterion_MCSUVR(recov_B[:,39], real_B[:,39])
-        loss_cycle_B_41 = criterion_MCSUVR(recov_B[:,41], real_B[:,41])
-        loss_cycle_B_42 = criterion_MCSUVR(recov_B[:,42], real_B[:,42])
-        loss_cycle_B_29 = criterion_MCSUVR(recov_B[:,29], real_B[:,29])
-        loss_cycle_B_44 = criterion_MCSUVR(recov_B[:,44], real_B[:,44])
-        loss_cycle_B_26 = criterion_MCSUVR(recov_B[:,26], real_B[:,26])
-        loss_cycle_B_28 = criterion_MCSUVR(recov_B[:,28], real_B[:,28])
+        # # MCSUVR loss
+        # loss_cycle_B_39 = criterion_MCSUVR(recov_B[:,39], real_B[:,39])
+        # loss_cycle_B_41 = criterion_MCSUVR(recov_B[:,41], real_B[:,41])
+        # loss_cycle_B_42 = criterion_MCSUVR(recov_B[:,42], real_B[:,42])
+        # loss_cycle_B_29 = criterion_MCSUVR(recov_B[:,29], real_B[:,29])
+        # loss_cycle_B_44 = criterion_MCSUVR(recov_B[:,44], real_B[:,44])
+        # loss_cycle_B_26 = criterion_MCSUVR(recov_B[:,26], real_B[:,26])
+        # loss_cycle_B_28 = criterion_MCSUVR(recov_B[:,28], real_B[:,28])
         
-        loss_cycle_A_39 = criterion_MCSUVR(recov_A[:,39], real_A[:,39])
-        loss_cycle_A_41 = criterion_MCSUVR(recov_A[:,41], real_A[:,41])
-        loss_cycle_A_42 = criterion_MCSUVR(recov_A[:,42], real_A[:,42])
-        loss_cycle_A_29 = criterion_MCSUVR(recov_A[:,29], real_A[:,29])
-        loss_cycle_A_44 = criterion_MCSUVR(recov_A[:,44], real_A[:,44])
-        loss_cycle_A_26 = criterion_MCSUVR(recov_A[:,26], real_A[:,26])
-        loss_cycle_A_28 = criterion_MCSUVR(recov_A[:,28], real_A[:,28])
+        # loss_cycle_A_39 = criterion_MCSUVR(recov_A[:,39], real_A[:,39])
+        # loss_cycle_A_41 = criterion_MCSUVR(recov_A[:,41], real_A[:,41])
+        # loss_cycle_A_42 = criterion_MCSUVR(recov_A[:,42], real_A[:,42])
+        # loss_cycle_A_29 = criterion_MCSUVR(recov_A[:,29], real_A[:,29])
+        # loss_cycle_A_44 = criterion_MCSUVR(recov_A[:,44], real_A[:,44])
+        # loss_cycle_A_26 = criterion_MCSUVR(recov_A[:,26], real_A[:,26])
+        # loss_cycle_A_28 = criterion_MCSUVR(recov_A[:,28], real_A[:,28])
         
-        loss_MCSUVR_A = (loss_cycle_A_39 + loss_cycle_A_41 + loss_cycle_A_42 + loss_cycle_A_29 + loss_cycle_A_44 + loss_cycle_A_26 + loss_cycle_A_28) / 7
-        loss_MCSUVR_B = (loss_cycle_B_39 + loss_cycle_B_41 + loss_cycle_B_42 + loss_cycle_B_29 + loss_cycle_B_44 + loss_cycle_B_26 + loss_cycle_B_28) / 7
-        loss_MCSUVR = (loss_MCSUVR_A + loss_MCSUVR_B) / 2
+        # loss_MCSUVR_A = (loss_cycle_A_39 + loss_cycle_A_41 + loss_cycle_A_42 + loss_cycle_A_29 + loss_cycle_A_44 + loss_cycle_A_26 + loss_cycle_A_28) / 7
+        # loss_MCSUVR_B = (loss_cycle_B_39 + loss_cycle_B_41 + loss_cycle_B_42 + loss_cycle_B_29 + loss_cycle_B_44 + loss_cycle_B_26 + loss_cycle_B_28) / 7
+        # loss_MCSUVR = (loss_MCSUVR_A + loss_MCSUVR_B) / 2
         
         # Total loss
-        loss_G = loss_GAN + opt.lambda_cyc * loss_cycle + opt.lambda_id * loss_identity + opt.lambda_mc * loss_MCSUVR
+        loss_G = loss_GAN + opt.lambda_cyc * loss_cycle + opt.lambda_id * loss_identity # + opt.lambda_mc * loss_MCSUVR
         loss_G.backward()
         optimizer_G.step()
 
@@ -299,7 +294,5 @@ for epoch in range(opt.epoch, opt.n_epochs):
     lr_scheduler_D_A.step()
     lr_scheduler_D_B.step()
     
-    # if epoch == 350:
-    #     opt.sample_interval = 1
     
    

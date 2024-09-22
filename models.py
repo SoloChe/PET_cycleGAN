@@ -6,7 +6,7 @@ import torch
 def weights_init_normal(m):
     classname = m.__class__.__name__
     if classname.find('Linear') != -1:
-        nn.init.normal_(m.weight.data, 0.0, 0.03)
+        nn.init.normal_(m.weight.data, 0.0, 0.03) # 0.03
         if m.bias is not None:
             nn.init.constant_(m.bias.data, 0.0)
     
@@ -26,6 +26,7 @@ class Generater_MLP_Skip(nn.Module):
         
         # Define activation function
         self.activation = nn.LeakyReLU()
+        # self.activation = nn.SiLU()
         self.apply(weights_init_normal)
         
     def forward(self, x):
@@ -58,6 +59,7 @@ class Discriminator_MLP_Skip(nn.Module):
     
         # Define activation function
         self.activation = nn.LeakyReLU()
+        # self.activation = nn.SiLU()
         self.apply(weights_init_normal)
         
     def forward(self, x):

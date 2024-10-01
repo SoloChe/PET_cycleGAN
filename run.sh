@@ -3,12 +3,12 @@
 #SBATCH --job-name='cycleGAN'
 #SBATCH --nodes=1                       
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=12
-#SBATCH --mem=12G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=16G
 #SBATCH -p general             
 #SBATCH -q public
             
-#SBATCH -t 0-10:00:00               
+#SBATCH -t 1-00:00:00               
             
 #SBATCH -e ./slurm_out/slurm.%j.err
 #SBATCH -o ./slurm_out/slurm.%j.out
@@ -20,21 +20,27 @@ source activate torch_base
 
 for resample in 1
 do
-    for generator_width in 165
+    for generator_width in 160 150
     do
-        for num_residual_blocks_generator in 8
+        for num_residual_blocks_generator in 4 5 6
         do
-            for discriminator_width in 160 165
+            for discriminator_width in 150 160
             do
-                for num_residual_blocks_discriminator in 10
+                for num_residual_blocks_discriminator in 4 5 6
                 do
                     for lambda_cyc in 10
                     do
-                        for lambda_mc in 5
+                        for lambda_id in 5
                         do
-                            for lambda_id in 5
+                            for lambda_mc in 0 0.1 1
                             do
-                                ~/.conda/envs/torch_base/bin/python main.py --resample $resample --generator_width $generator_width --num_residual_blocks_generator $num_residual_blocks_generator --discriminator_width $discriminator_width --num_residual_blocks_discriminator $num_residual_blocks_discriminator --lambda_cyc $lambda_cyc --lambda_id $lambda_id --lambda_mc $lambda_mc --log_path ./training_logs_matching_mc_l2 --lr 0.0002 --decay_epoch 100 --n_epochs 500
+                                patch_size=29
+                                num_patch=3
+
+                                batch_size=50
+                                pool_size=2500
+
+                                ~/.conda/envs/torch_base/bin/python main.py --resample $resample --generator_width $generator_width --num_residual_blocks_generator $num_residual_blocks_generator --discriminator_width $discriminator_width --num_residual_blocks_discriminator $num_residual_blocks_discriminator --lambda_cyc $lambda_cyc --lambda_id $lambda_id --lambda_mc $lambda_mc --log_path ./logs_batch_${batch_size}_pool_${pool_size}_patch_${patch_size}_${num_patch} --lr 0.0002 --decay_epoch 100 --n_epochs 500  --sample_interval 10 --batch_size $batch_size --pool_size $pool_size --patch_size $patch_size --num_patch $num_patch 
                             done
                         done
                     done

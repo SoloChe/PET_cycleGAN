@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name='cycleGAN_sep'
+#SBATCH --job-name='sep'
 #SBATCH --nodes=1                       
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
@@ -28,14 +28,13 @@ do
             do
                 for num_residual_blocks_discriminator in 10
                 do
-                    for lambda_cyc in 10
+                    for lambda_cyc in 4 7 10 12
                     do
-                        for lambda_mc in 0
+                        for lambda_mc in 0.1 0.5 0.7 0 1 2 5
                         do
-                            for lambda_id in 3 7
+                            for lambda_id in 1 3 5 7
                             do
-                                ~/.conda/envs/torch_base/bin/python main_sep.py --resample $resample --generator_width $generator_width --num_residual_blocks_generator $num_residual_blocks_generator --discriminator_width $discriminator_width --num_residual_blocks_discriminator $num_residual_blocks_discriminator --lambda_cyc $lambda_cyc --lambda_id $lambda_id --lambda_mc $lambda_mc --log_path ./training_logs_matching_sep --lr 0.0002 --decay_epoch 100 --n_epochs 500
-                            done
+                                ~/.conda/envs/torch_base/bin/python main_sep.py --resample $resample --generator_width $generator_width --num_residual_blocks_generator $num_residual_blocks_generator --discriminator_width $discriminator_width --num_residual_blocks_discriminator $num_residual_blocks_discriminator --lambda_cyc $lambda_cyc --lambda_id $lambda_id --lambda_mc $lambda_mc --log_path ./training_logs_matching_sep_mc_l2_new --lr 0.0002 --decay_epoch 100 --n_epochs 500 --batch_size 16 
                         done
                     done
                 done

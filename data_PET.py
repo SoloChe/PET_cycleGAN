@@ -70,6 +70,11 @@ def read_data(normalize=False, separate=False, baseline=False):
     pPiB_sep_path = '/data/amciilab/processedDataset/Centiloid/FBP_PIB/PUP_PIB/runExtract/list_id_SUVRLR.csv'
     
     
+    # CL are same for both sep. and non-sep. datasets
+    uPiB1_CL = pd.read_excel(uPiB1_path, sheet_name='Sheet1')
+    uPiB2_CL = pd.read_excel(uPiB2_path, sheet_name='Summary')
+    uFBP_CL = pd.read_excel(uFBP_path, sheet_name='Demo')
+    
     if not separate:
         uPiB1 = pd.read_excel(uPiB1_path, sheet_name='AIBL_PIB_PUP')
         uPiB2 = pd.read_excel(uPiB2_path, sheet_name='OASIS_PIB_PUP')
@@ -90,7 +95,14 @@ def read_data(normalize=False, separate=False, baseline=False):
             # baseline selection for uFBP
             sorted_uFBP = uFBP.sort_values(by=['RID', 'Actual Date'])
             uFBP = sorted_uFBP.drop_duplicates(subset='RID', keep='first')
-        
+            
+            uFBP_CL = uFBP_CL[uFBP_CL['PUP ID'].isin(uFBP['PUP ID'])]['CL']
+            uPiB1_CL_baseline = uPiB1_CL[uPiB1_CL['SID'].isin(uPiB1['ID'])]
+            uPiB2_CL_baseline = uPiB2_CL[uPiB2_CL['PIB_ID'].isin(uPiB2['ID'])]
+            uPiB_CL = pd.concat([uPiB1_CL_baseline, uPiB2_CL_baseline])['CL']
+        else:
+            uPiB_CL = pd.concat([uPiB1_CL, uPiB2_CL], axis=0)['CL']
+            uFBP_CL = uFBP_CL['CL']
         
         # remove ID column and other columns that are not needed
         uPiB1 = uPiB1.iloc[:, 1:90]
@@ -105,6 +117,10 @@ def read_data(normalize=False, separate=False, baseline=False):
         uPiB = pd.concat([uPiB1, uPiB2])
         pFBP = pd.read_csv(pFBP_sep_path)
         pPiB = pd.read_csv(pPiB_sep_path)
+        
+        uPiB_CL = pd.concat([uPiB1_CL, uPiB2_CL], axis=0)['CL']
+        uFBP_CL = uFBP_CL['CL']
+        
         # remove ID column 
         uPiB1 = uPiB1.iloc[:, 1:]
         uPiB2 = uPiB2.iloc[:, 1:]
@@ -114,13 +130,7 @@ def read_data(normalize=False, separate=False, baseline=False):
         
     uPiB = pd.concat([uPiB1, uPiB2], axis=0)
     
-    # CL are same for both sep. and non-sep. datasets
-    uPiB1_CL = pd.read_excel(uPiB1_path, sheet_name='Sheet1')
-    uPiB2_CL = pd.read_excel(uPiB2_path, sheet_name='Summary')
-    uFBP_CL = pd.read_excel(uFBP_path, sheet_name='Demo')
-    uPiB_CL = pd.concat([uPiB1_CL, uPiB2_CL], axis=0)['CL']
-    uFBP_CL = uFBP_CL['CL']
-
+        
     # Drop columns with only one unique value
     names = []
     for i, name in enumerate(uFBP.columns):
@@ -187,8 +197,16 @@ class UnpairedDataset(Dataset):
                 idx_PiB, idx_FBP = distribution_matching(uPiB_CL, uFBP_CL, hist1, hist2, bin_edges1)
                 # select the indices that are in both resampled sequences
                 self.resample_FBP = self.uFBP
-                resample_PiB = self.uPiB[idx_PiB]
-                self.resample_PiB = np.concatenate([self.uPiB, resample_PiB], axis=0) 
+                self.resample_PiB = self.uPiB
+                
+                if len(idx_PiB) > 0:
+                    resample_PiB = self.uPiB[idx_PiB]
+                    self.resample_PiB = np.concatenate([self.uPiB, resample_PiB], axis=0) 
+                
+                if len(idx_FBP) > 0:
+                    resample_FBP = self.uFBP[idx_FBP]
+                    self.resample_FBP = np.concatenate([self.uFBP, resample_FBP], axis=0)
+                    
             elif self.resample == 'resample_to_n':
                 idx_PiB, idx_FBP = resample_to_n(uPiB_CL, uFBP_CL, hist1, hist2, bin_edges1)
                 self.resample_FBP = self.uFBP[idx_FBP]
@@ -202,8 +220,6 @@ class UnpairedDataset(Dataset):
         self.len = max(len(self.resample_FBP), len(self.resample_PiB))    
         self.len1 = len(self.resample_FBP)
         self.len2 = len(self.resample_PiB)
-        # print(self.len1)
-        # print(self.len2)
     
     def __len__(self):
         return self.len
@@ -211,26 +227,32 @@ class UnpairedDataset(Dataset):
         return self.resample_FBP[idx%self.len1], self.resample_PiB[idx%self.len2]
     
 def get_data_loaders(uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, 
-                     batch_size_p, batch_size_u, resample=True):
+                     batch_size_u, resample='matching'):
+    # uPiB = torch.from_numpy(uPiB).float().unsqueeze(1)
+    # uFBP = torch.from_numpy(uFBP).float().unsqueeze(1)
+    # pPiB = torch.from_numpy(pPiB).float().unsqueeze(1)
+    # pFBP = torch.from_numpy(pFBP).float().unsqueeze(1)
+    
     uPiB = torch.from_numpy(uPiB).float()
     uFBP = torch.from_numpy(uFBP).float()
     pPiB = torch.from_numpy(pPiB).float()
     pFBP = torch.from_numpy(pFBP).float()
-    paired_dataset = PairedDataset(pFBP, pPiB)
+   
     unpaired_dataset = UnpairedDataset(uFBP, uPiB, uPiB_CL, uFBP_CL, resample=resample)
-    paired_loader = DataLoader(paired_dataset, batch_size=batch_size_p, shuffle=False)
     unpaired_loader = DataLoader(unpaired_dataset, batch_size=batch_size_u, shuffle=True)
-    return paired_loader, unpaired_loader
+    paired_dataset = (pFBP, pPiB)
+
+    return paired_dataset, unpaired_loader
 
 if __name__ == "__main__":
-    paired_loader, unpaired_loader = get_data_loaders(2, 2)
-    for i, (brain, blood) in enumerate(paired_loader):
-        print(brain.shape, blood.shape)
-        print(brain.dtype, blood.dtype)
+    uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, uPiB_scaler, uFBP_scaler = read_data(normalize=True, separate=False)
+    paired, unpaired = get_data_loaders(uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, 16)
+    
+    for i, (fbp, pib) in enumerate(unpaired):
+        print(fbp.shape, pib.shape)
         if i == 0:
             break
-    for i, (brain, blood) in enumerate(unpaired_loader):
-        print(brain.shape, blood.shape)
-        print(brain.dtype, blood.dtype)
-        if i == 0:
-            break
+        
+    fbp, pib = paired
+    print(fbp.shape, pib.shape)
+

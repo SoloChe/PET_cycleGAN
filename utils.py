@@ -30,7 +30,7 @@ class ReplayBuffer:
                     self.data[i] = element
                 else:
                     to_return.append(element)
-        return Variable(torch.cat(to_return))
+        return torch.cat(to_return)
 
 
 class LambdaLR:

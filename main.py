@@ -1,20 +1,17 @@
 import argparse
-import os
 from pathlib import Path
 import numpy as np
-import math
 import itertools
-import datetime
-import time
+import random
 
 from models import *
 from utils import *
 # from data import get_data_loaders, get_unpaired_blood
 from data_PET import get_data_loaders, read_data
 from MCSUVR import load_weights, cal_MCSUVR_torch, cal_correlation
+# from model1D_new import define_G
+# from pool import ImagePool
 
-import torch.nn as nn
-import torch.nn.functional as F
 import torch
 
 import logging
@@ -32,6 +29,9 @@ parser.add_argument("--sample_interval", type=int, default=10, help="interval be
 parser.add_argument("--lambda_cyc", type=float, default=10.0, help="cycle loss weight")
 parser.add_argument("--lambda_id", type=float, default=5.0, help="identity loss weight")
 parser.add_argument("--lambda_mc", type=float, default=5.0, help="MCSUVR loss weight")
+parser.add_argument("--pool_size", type=int, default=50, help="size of image buffer that stores previously generated images")
+parser.add_argument("--patch_size", type=int, default=85, help="size of patch for patchGAN discriminator")
+parser.add_argument("--num_patch", type=int, default=1, help="number of patch for patchGAN discriminator")
 
 parser.add_argument("--baseline", type=int, default=0, help="whether baseline model")
 
@@ -47,6 +47,10 @@ print(opt)
 # set random seed
 torch.manual_seed(0)
 np.random.seed(0)
+random.seed(0)
+# Ensure deterministic behavior in PyTorch
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 ######################
 MCSUVR_WEIGHT, _, REGION_INDEX = load_weights()
@@ -59,35 +63,50 @@ def save_model(model_save_path, suffix):
     torch.save(D_A.state_dict(), model_save_path / f"D_A_{suffix}.pth")
     torch.save(D_B.state_dict(), model_save_path / f"D_B_{suffix}.pth")
     
-def sample_images(val_dataloader, uPiB_scaler=None, uFBP_scaler=None):
+def sample_images(paired, uPiB_scaler=None, uFBP_scaler=None):
     """Saves a generated sample from the test set"""
-    paired = next(iter(val_dataloader))
+    
     assert paired[0].shape[0] == paired[1].shape[0] == 46
     G_AB.eval()
     G_BA.eval()
-    real_A = paired[0].to(device) # FBP
-    fake_B = G_AB(real_A) # Fake PiB
-    real_B = paired[1].to(device) # PiB
-    fake_A = G_BA(real_B) # Fake FBP
     
-    if uPiB_scaler is not None and uFBP_scaler is not None:
-        real_A = torch.from_numpy(uFBP_scaler.inverse_transform(real_A.cpu().detach().numpy()))
-        real_B = torch.from_numpy(uPiB_scaler.inverse_transform(real_B.cpu().detach().numpy()))
-        fake_A = torch.from_numpy(uFBP_scaler.inverse_transform(fake_A.cpu().detach().numpy()))
-        fake_B = torch.from_numpy(uPiB_scaler.inverse_transform(fake_B.cpu().detach().numpy()))
-   
-    REAL_MCSUVR = cal_MCSUVR_torch(real_B, REGION_INDEX, MCSUVR_WEIGHT)
-    FAKE_MCSUVR = cal_MCSUVR_torch(fake_B, REGION_INDEX, MCSUVR_WEIGHT)
-    cor = cal_correlation(REAL_MCSUVR.cpu().detach().numpy(), FAKE_MCSUVR.cpu().detach().numpy())
+    with torch.no_grad():
+        real_A = paired[0].to(device) # FBP
+        fake_B = G_AB(real_A) # Fake PiB
+        real_B = paired[1].to(device) # PiB
+        fake_A = G_BA(real_B) # Fake FBP
+        
+        if uPiB_scaler is not None and uFBP_scaler is not None:
+            real_A = torch.from_numpy(uFBP_scaler.inverse_transform(real_A.cpu().numpy()))
+            real_B = torch.from_numpy(uPiB_scaler.inverse_transform(real_B.cpu().numpy()))
+            fake_A = torch.from_numpy(uFBP_scaler.inverse_transform(fake_A.cpu().numpy()))
+            fake_B = torch.from_numpy(uPiB_scaler.inverse_transform(fake_B.cpu().numpy()))
     
-    # calculate relative error
-    error_A = torch.mean(torch.abs(fake_A - real_A) / (real_A+1e-8)) 
-    error_B = torch.mean(torch.abs(fake_B - real_B) / (real_B+1e-8)) 
-    return error_A, error_B, cor, fake_A, fake_B
+        REAL_MCSUVR_B = cal_MCSUVR_torch(real_B, REGION_INDEX, MCSUVR_WEIGHT)
+        FAKE_MCSUVR_B = cal_MCSUVR_torch(fake_B, REGION_INDEX, MCSUVR_WEIGHT)
+        cor_B = cal_correlation(REAL_MCSUVR_B.cpu().numpy(), FAKE_MCSUVR_B.cpu().numpy())
+        
+        REAL_MCSUVR_A = cal_MCSUVR_torch(real_A, REGION_INDEX, MCSUVR_WEIGHT)
+        FAKE_MCSUVR_A = cal_MCSUVR_torch(fake_A, REGION_INDEX, MCSUVR_WEIGHT)
+        cor_A = cal_correlation(REAL_MCSUVR_A.cpu().numpy(), FAKE_MCSUVR_A.cpu().numpy())
+        
+        # calculate relative error
+        error_A = torch.mean(torch.abs(fake_A - real_A) / (real_A+1e-8)) 
+        error_B = torch.mean(torch.abs(fake_B - real_B) / (real_B+1e-8))
+        
+        
+    return error_A, error_B, cor_A, cor_B, fake_A, fake_B
+
+def MCSUVR_loss(fake_A, real_A, fake_B, real_B, REGION_INDEX):
+    mcsuvr_loss_A  = [criterion_MCSUVR(fake_A[:,i], real_A[:,i]) for i in REGION_INDEX.values()]
+    mcsuvr_loss_B  = [criterion_MCSUVR(fake_B[:,i], real_B[:,i]) for i in REGION_INDEX.values()]
+    mcsuvr_loss = torch.stack(mcsuvr_loss_A + mcsuvr_loss_B)
+    assert mcsuvr_loss.shape[0] == 7*2, f'Error in MCSUVR loss shape: {mcsuvr_loss.shape[0]}'
+    return torch.mean(mcsuvr_loss)
 
 # path
 log_path = Path(opt.log_path)
-training_setup = f'{opt.generator_width}_{opt.discriminator_width}_{opt.num_residual_blocks_generator}_{opt.num_residual_blocks_discriminator}_{opt.resample}_{opt.lambda_cyc}_{opt.lambda_id}_{opt.lambda_mc}'
+training_setup = f'{opt.generator_width}_{opt.discriminator_width}_{opt.num_residual_blocks_generator}_{opt.num_residual_blocks_discriminator}_{opt.lambda_cyc}_{opt.lambda_id}_{opt.lambda_mc}'
 
 log_setup_path = log_path / 'log' / training_setup
 model_save_path = log_path / 'saved_model' / training_setup
@@ -115,10 +134,11 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 logger.info('Training started')
     
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = 'cpu'
 
 # Losses
-# criterion_GAN = torch.nn.MSELoss()
-criterion_GAN = torch.nn.BCELoss()
+criterion_GAN =GANLoss('vanilla')
 criterion_cycle = torch.nn.L1Loss()
 criterion_identity = torch.nn.L1Loss()
 
@@ -126,16 +146,18 @@ criterion_identity = torch.nn.L1Loss()
 criterion_MCSUVR = torch.nn.MSELoss()
 # criterion_MCSUVR = torch.nn.L1Loss()
 
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = 'cpu'
+
 # input_shape = (opt.channels, opt.img_height, opt.img_width)
 input_dim = 85
 latent_dim = 85
 # Initialize generator and discriminator
 G_AB = Generater_MLP_Skip(input_dim, opt.generator_width, latent_dim, opt.num_residual_blocks_generator)
 G_BA = Generater_MLP_Skip(input_dim, opt.generator_width, latent_dim, opt.num_residual_blocks_generator)   
-D_A = Discriminator_MLP_Skip(input_dim, hidden_size=opt.discriminator_width, num_layers=opt.num_residual_blocks_discriminator)
-D_B = Discriminator_MLP_Skip(input_dim, hidden_size=opt.discriminator_width, num_layers=opt.num_residual_blocks_discriminator)
+
+D_A = PatchMLPDiscriminator_1D_Res(opt.num_patch, patch_size=opt.patch_size, hidden_size=opt.discriminator_width, num_residual_blocks=opt.num_residual_blocks_discriminator)
+D_B = PatchMLPDiscriminator_1D_Res(opt.num_patch, patch_size=opt.patch_size, hidden_size=opt.discriminator_width, num_residual_blocks=opt.num_residual_blocks_discriminator)
+
+
 G_AB = G_AB.to(device)
 G_BA = G_BA.to(device)
 D_A = D_A.to(device)
@@ -162,34 +184,31 @@ lr_scheduler_D_B = torch.optim.lr_scheduler.LambdaLR(
 
 # data
 baseline = True if opt.baseline == 1 else False
-opt.resample = 0 if opt.baseline == 1 else opt.resample # make sure resample is 0 for baseline model
-
 uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, uPiB_scaler, uFBP_scaler = read_data(normalize=False, separate=False, baseline=baseline)
+
+# pool
+fake_A_pool = ReplayBuffer(opt.pool_size)
+fake_B_pool = ReplayBuffer(opt.pool_size)
 
 # ----------
 #  Training
 # ----------
 max_cor = -1e8
 resample ={0:False, 1:'matching', 2:'resample_to_n'}
-fw = torch.ones(1, 85).to(device)
 
 for epoch in range(opt.epoch, opt.n_epochs):
 
     # data loader
     # resample for each epoch
-    val_dataloader, dataloader = get_data_loaders(uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, 
-                                                  opt.batch_size, 46, resample=resample[opt.resample])
+    paired_data, unpaired_loader = get_data_loaders(uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, 
+                                                 opt.batch_size, resample=resample[opt.resample])
   
-    
-    for i, batch in enumerate(dataloader):
+    for i, batch in enumerate(unpaired_loader):
 
         # Set model input
         real_A = batch[0].to(device)
         real_B = batch[1].to(device)
-        # Adversarial ground truths
-        valid = torch.full((real_A.shape[0],), 1, dtype=torch.float, device=device)
-        fake = torch.full((real_A.shape[0],), 0, dtype=torch.float, device=device)
-
+        
         # ------------------
         #  Train Generators
         # ------------------
@@ -204,9 +223,9 @@ for epoch in range(opt.epoch, opt.n_epochs):
 
         # GAN loss
         fake_B = G_AB(real_A)
-        loss_GAN_AB = criterion_GAN(D_B(fake_B).view(-1), valid)
+        loss_GAN_AB = criterion_GAN(D_B(fake_B), True)
         fake_A = G_BA(real_B)
-        loss_GAN_BA = criterion_GAN(D_A(fake_A).view(-1), valid)
+        loss_GAN_BA = criterion_GAN(D_A(fake_A), True)
         loss_GAN = (loss_GAN_AB + loss_GAN_BA) / 2
 
         # Cycle loss
@@ -218,25 +237,7 @@ for epoch in range(opt.epoch, opt.n_epochs):
         loss_cycle = (loss_cycle_A + loss_cycle_B) / 2
         
         # MCSUVR loss
-        loss_cycle_B_39 = criterion_MCSUVR(recov_B[:,39], real_B[:,39])
-        loss_cycle_B_41 = criterion_MCSUVR(recov_B[:,41], real_B[:,41])
-        loss_cycle_B_42 = criterion_MCSUVR(recov_B[:,42], real_B[:,42])
-        loss_cycle_B_29 = criterion_MCSUVR(recov_B[:,29], real_B[:,29])
-        loss_cycle_B_44 = criterion_MCSUVR(recov_B[:,44], real_B[:,44])
-        loss_cycle_B_26 = criterion_MCSUVR(recov_B[:,26], real_B[:,26])
-        loss_cycle_B_28 = criterion_MCSUVR(recov_B[:,28], real_B[:,28])
-        
-        loss_cycle_A_39 = criterion_MCSUVR(recov_A[:,39], real_A[:,39])
-        loss_cycle_A_41 = criterion_MCSUVR(recov_A[:,41], real_A[:,41])
-        loss_cycle_A_42 = criterion_MCSUVR(recov_A[:,42], real_A[:,42])
-        loss_cycle_A_29 = criterion_MCSUVR(recov_A[:,29], real_A[:,29])
-        loss_cycle_A_44 = criterion_MCSUVR(recov_A[:,44], real_A[:,44])
-        loss_cycle_A_26 = criterion_MCSUVR(recov_A[:,26], real_A[:,26])
-        loss_cycle_A_28 = criterion_MCSUVR(recov_A[:,28], real_A[:,28])
-        
-        loss_MCSUVR_A = (loss_cycle_A_39 + loss_cycle_A_41 + loss_cycle_A_42 + loss_cycle_A_29 + loss_cycle_A_44 + loss_cycle_A_26 + loss_cycle_A_28) / 7
-        loss_MCSUVR_B = (loss_cycle_B_39 + loss_cycle_B_41 + loss_cycle_B_42 + loss_cycle_B_29 + loss_cycle_B_44 + loss_cycle_B_26 + loss_cycle_B_28) / 7
-        loss_MCSUVR = (loss_MCSUVR_A + loss_MCSUVR_B) / 2
+        loss_MCSUVR = MCSUVR_loss(recov_A, real_A, recov_B, real_B, REGION_INDEX)
         
         # Total loss
         loss_G = loss_GAN + opt.lambda_cyc * loss_cycle + opt.lambda_id * loss_identity + opt.lambda_mc * loss_MCSUVR
@@ -247,10 +248,11 @@ for epoch in range(opt.epoch, opt.n_epochs):
         #  Train Discriminator A
         # -----------------------
         optimizer_D_A.zero_grad()
+        fake_A = fake_A_pool.push_and_pop(fake_A)
         # Real loss
-        loss_real = criterion_GAN(D_A(real_A).view(-1), valid)
+        loss_real = criterion_GAN(D_A(real_A), True)
         # Fake loss (on batch of previously generated samples)
-        loss_fake = criterion_GAN(D_A(fake_A.detach()).view(-1), fake)
+        loss_fake = criterion_GAN(D_A(fake_A.detach()), False)
         # Total loss
         loss_D_A = (loss_real + loss_fake) / 2
         loss_D_A.backward()
@@ -260,10 +262,11 @@ for epoch in range(opt.epoch, opt.n_epochs):
         #  Train Discriminator B
         # -----------------------
         optimizer_D_B.zero_grad()
+        fake_B = fake_B_pool.push_and_pop(fake_B)
         # Real loss
-        loss_real = criterion_GAN(D_B(real_B).view(-1), valid)
+        loss_real = criterion_GAN(D_B(real_B), True)
         # Fake loss (on batch of previously generated samples)
-        loss_fake = criterion_GAN(D_B(fake_B.detach()).view(-1), fake)
+        loss_fake = criterion_GAN(D_B(fake_B.detach()), False)
         # Total loss
         loss_D_B = (loss_real + loss_fake) / 2
         loss_D_B.backward()
@@ -276,14 +279,15 @@ for epoch in range(opt.epoch, opt.n_epochs):
         # --------------
 
         # Determine approximate time left
-        batches_done = epoch * len(dataloader) + i
-        batches_left = opt.n_epochs * len(dataloader) - batches_done
+        batches_done = epoch * len(unpaired_loader) + i
+        batches_left = opt.n_epochs * len(unpaired_loader) - batches_done
 
         # If at sample interval save image
         if batches_done % opt.sample_interval == 0:
-            error_A, error_B, cor, fake_A, fake_B = sample_images(val_dataloader, uPiB_scaler, uFBP_scaler)
-            if cor > max_cor:
-                max_cor = cor
+            error_A, error_B, cor_A, cor_B, fake_A, fake_B = sample_images(paired_data, uPiB_scaler, uFBP_scaler)
+            if cor_B > max_cor:
+                max_cor = cor_B
+                cor_cor_A = cor_A
                 cor_error_B = error_B
                 cor_error_A = error_A
                 # save tensors
@@ -291,15 +295,18 @@ for epoch in range(opt.epoch, opt.n_epochs):
                 torch.save(fake_A, f'./{data_save_path}/fake_A_Best.pt')
                 # save model
                 save_model(model_save_path, 'Best')
-                
-            logger.info(f"Epoch: {epoch}, Batch: {i}, D loss: {loss_D.item():.4f}, G loss: {loss_G.item():.4f}, adv: {loss_GAN.item():.4f}, cycle: {loss_cycle.item():.4f}, identity: {loss_identity.item():.4f}, cor_error_A: {cor_error_A:.4f}, cor_error_B: {cor_error_B:.4f},  max_cor: {max_cor:.4f}")
+            
+            logger.info("+" * 30)
+            logger.info(f"Epoch: {epoch}, Batch: {i}, D loss: {loss_D.item():.4f}, G loss: {loss_G.item():.4f}, adv: {loss_GAN.item():.4f}, cycle: {loss_cycle.item():.4f}, identity: {loss_identity.item():.4f}, error_A: {error_A:.4f}, error_B: {error_B:.4f},  cor_A: {cor_A:.4f}, cor_B: {cor_B:.4f} ")
+            logger.info("-" * 30)
+            logger.info(f"max_cor_B: {max_cor:.4f}, cor_cor_A: {cor_cor_A:.4f}, cor_error_A: {cor_error_A:.4f}, cor_error_B: {cor_error_B:.4f}")
+            logger.info("+" * 30)
+            logger.info("")
            
     # Update learning rates
     lr_scheduler_G.step()
     lr_scheduler_D_A.step()
     lr_scheduler_D_B.step()
     
-    # if epoch == 350:
-    #     opt.sample_interval = 1
     
    

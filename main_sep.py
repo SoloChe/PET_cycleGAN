@@ -28,7 +28,7 @@ parser.add_argument("--lr", type=float, default=0.0002, help="adam: learning rat
 parser.add_argument("--b1", type=float, default=0.9, help="adamw: decay of first order momentum of gradient")
 parser.add_argument("--b2", type=float, default=0.999, help="adamw: decay of first order momentum of gradient")
 parser.add_argument("--decay_epoch", type=int, default=100, help="epoch from which to start lr decay")
-parser.add_argument("--sample_interval", type=int, default=10, help="interval between saving generator outputs")
+parser.add_argument("--sample_interval", type=int, default=1, help="interval between saving generator outputs")
 parser.add_argument("--lambda_cyc", type=float, default=10.0, help="cycle loss weight")
 parser.add_argument("--lambda_id", type=float, default=5.0, help="identity loss weight")
 parser.add_argument("--lambda_mc", type=float, default=5.0, help="MCSUVR loss weight")
@@ -57,31 +57,46 @@ def save_model(model_save_path, suffix):
     torch.save(D_A.state_dict(), model_save_path / f"D_A_{suffix}.pth")
     torch.save(D_B.state_dict(), model_save_path / f"D_B_{suffix}.pth")
     
-def sample_images(val_dataloader, uPiB_scaler=None, uFBP_scaler=None):
+def sample_images(paired, uPiB_scaler=None, uFBP_scaler=None):
     """Saves a generated sample from the test set"""
-    paired = next(iter(val_dataloader))
     assert paired[0].shape[0] == paired[1].shape[0] == 46
     G_AB.eval()
     G_BA.eval()
-    real_A = paired[0].to(device) # FBP
-    fake_B = G_AB(real_A) # Fake PiB
-    real_B = paired[1].to(device) # PiB
-    fake_A = G_BA(real_B) # Fake FBP
     
-    if uPiB_scaler is not None and uFBP_scaler is not None:
-        real_A = torch.from_numpy(uFBP_scaler.inverse_transform(real_A.cpu().detach().numpy()))
-        real_B = torch.from_numpy(uPiB_scaler.inverse_transform(real_B.cpu().detach().numpy()))
-        fake_A = torch.from_numpy(uFBP_scaler.inverse_transform(fake_A.cpu().detach().numpy()))
-        fake_B = torch.from_numpy(uPiB_scaler.inverse_transform(fake_B.cpu().detach().numpy()))
-   
-    REAL_MCSUVR = cal_MCSUVR_torch(real_B, REGION_INDEX, MCSUVR_WEIGHT, separate=True)
-    FAKE_MCSUVR = cal_MCSUVR_torch(fake_B, REGION_INDEX, MCSUVR_WEIGHT, separate=True)
-    cor = cal_correlation(REAL_MCSUVR.cpu().detach().numpy(), FAKE_MCSUVR.cpu().detach().numpy())
+    with torch.no_grad():
+        real_A = paired[0].to(device) # FBP
+        fake_B = G_AB(real_A) # Fake PiB
+        real_B = paired[1].to(device) # PiB
+        fake_A = G_BA(real_B) # Fake FBP
+        
+        if uPiB_scaler is not None and uFBP_scaler is not None:
+            real_A = torch.from_numpy(uFBP_scaler.inverse_transform(real_A.cpu().numpy()))
+            real_B = torch.from_numpy(uPiB_scaler.inverse_transform(real_B.cpu().numpy()))
+            fake_A = torch.from_numpy(uFBP_scaler.inverse_transform(fake_A.cpu().numpy()))
+            fake_B = torch.from_numpy(uPiB_scaler.inverse_transform(fake_B.cpu().numpy()))
     
-    # calculate relative error
-    error_A = torch.mean(torch.abs(fake_A - real_A) / (real_A+1e-8)) 
-    error_B = torch.mean(torch.abs(fake_B - real_B) / (real_B+1e-8)) 
+        REAL_MCSUVR = cal_MCSUVR_torch(real_B, REGION_INDEX, MCSUVR_WEIGHT, separate=True)
+        FAKE_MCSUVR = cal_MCSUVR_torch(fake_B, REGION_INDEX, MCSUVR_WEIGHT, separate=True)
+        cor = cal_correlation(REAL_MCSUVR.cpu().numpy(), FAKE_MCSUVR.cpu().numpy())
+        
+        # calculate relative error
+        error_A = torch.mean(torch.abs(fake_A - real_A) / (real_A+1e-8)) 
+        error_B = torch.mean(torch.abs(fake_B - real_B) / (real_B+1e-8)) 
     return error_A, error_B, cor, fake_A, fake_B
+
+def MCSUVR_loss(fake_A, real_A, fake_B, real_B, REGION_INDEX):
+    mcsuvr_loss_A_r  = [criterion_MCSUVR(fake_A[:,i], real_A[:,i]) for i in REGION_INDEX['right'].values()]
+    mcsuvr_loss_A_l  = [criterion_MCSUVR(fake_A[:,i], real_A[:,i]) for i in REGION_INDEX['left'].values()]
+    mcsuvr_loss_A =  mcsuvr_loss_A_r + mcsuvr_loss_A_l
+    
+    mcsuvr_loss_B_r  = [criterion_MCSUVR(fake_B[:,i], real_B[:,i]) for i in REGION_INDEX['right'].values()]
+    mcsuvr_loss_B_l  = [criterion_MCSUVR(fake_B[:,i], real_B[:,i]) for i in REGION_INDEX['left'].values()]
+    mcsuvr_loss_B =  mcsuvr_loss_B_r + mcsuvr_loss_B_l
+    
+    mcsuvr_loss = torch.stack(mcsuvr_loss_A + mcsuvr_loss_B)
+    
+    assert mcsuvr_loss.shape[0] == 7*4, f'Error in MCSUVR loss shape: {mcsuvr_loss.shape[0]}'
+    return torch.mean(mcsuvr_loss)  
 
 # path
 log_path = Path(opt.log_path)
@@ -172,11 +187,11 @@ for epoch in range(opt.epoch, opt.n_epochs):
 
     # data loader
     # resample for each epoch
-    val_dataloader, dataloader = get_data_loaders(uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, 
-                                                  opt.batch_size, 46, resample=resample[opt.resample])
+    paired_data, unpaired_loader = get_data_loaders(uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, 
+                                                  opt.batch_size, resample=resample[opt.resample])
   
     
-    for i, batch in enumerate(dataloader):
+    for i, batch in enumerate(unpaired_loader):
 
         # Set model input
         real_A = batch[0].to(device)
@@ -212,29 +227,11 @@ for epoch in range(opt.epoch, opt.n_epochs):
         loss_cycle_B = criterion_cycle(recov_B, real_B)
         loss_cycle = (loss_cycle_A + loss_cycle_B) / 2
         
-        # # MCSUVR loss
-        # loss_cycle_B_39 = criterion_MCSUVR(recov_B[:,39], real_B[:,39])
-        # loss_cycle_B_41 = criterion_MCSUVR(recov_B[:,41], real_B[:,41])
-        # loss_cycle_B_42 = criterion_MCSUVR(recov_B[:,42], real_B[:,42])
-        # loss_cycle_B_29 = criterion_MCSUVR(recov_B[:,29], real_B[:,29])
-        # loss_cycle_B_44 = criterion_MCSUVR(recov_B[:,44], real_B[:,44])
-        # loss_cycle_B_26 = criterion_MCSUVR(recov_B[:,26], real_B[:,26])
-        # loss_cycle_B_28 = criterion_MCSUVR(recov_B[:,28], real_B[:,28])
-        
-        # loss_cycle_A_39 = criterion_MCSUVR(recov_A[:,39], real_A[:,39])
-        # loss_cycle_A_41 = criterion_MCSUVR(recov_A[:,41], real_A[:,41])
-        # loss_cycle_A_42 = criterion_MCSUVR(recov_A[:,42], real_A[:,42])
-        # loss_cycle_A_29 = criterion_MCSUVR(recov_A[:,29], real_A[:,29])
-        # loss_cycle_A_44 = criterion_MCSUVR(recov_A[:,44], real_A[:,44])
-        # loss_cycle_A_26 = criterion_MCSUVR(recov_A[:,26], real_A[:,26])
-        # loss_cycle_A_28 = criterion_MCSUVR(recov_A[:,28], real_A[:,28])
-        
-        # loss_MCSUVR_A = (loss_cycle_A_39 + loss_cycle_A_41 + loss_cycle_A_42 + loss_cycle_A_29 + loss_cycle_A_44 + loss_cycle_A_26 + loss_cycle_A_28) / 7
-        # loss_MCSUVR_B = (loss_cycle_B_39 + loss_cycle_B_41 + loss_cycle_B_42 + loss_cycle_B_29 + loss_cycle_B_44 + loss_cycle_B_26 + loss_cycle_B_28) / 7
-        # loss_MCSUVR = (loss_MCSUVR_A + loss_MCSUVR_B) / 2
+        # MCSUVR loss
+        loss_MCSUVR = MCSUVR_loss(recov_A, real_A, recov_B, real_B, REGION_INDEX)
         
         # Total loss
-        loss_G = loss_GAN + opt.lambda_cyc * loss_cycle + opt.lambda_id * loss_identity # + opt.lambda_mc * loss_MCSUVR
+        loss_G = loss_GAN + opt.lambda_cyc * loss_cycle + opt.lambda_id * loss_identity + opt.lambda_mc * loss_MCSUVR
         loss_G.backward()
         optimizer_G.step()
 
@@ -271,12 +268,12 @@ for epoch in range(opt.epoch, opt.n_epochs):
         # --------------
 
         # Determine approximate time left
-        batches_done = epoch * len(dataloader) + i
-        batches_left = opt.n_epochs * len(dataloader) - batches_done
+        batches_done = epoch * len(unpaired_loader) + i
+        batches_left = opt.n_epochs * len(unpaired_loader) - batches_done
 
         # If at sample interval save image
         if batches_done % opt.sample_interval == 0:
-            error_A, error_B, cor, fake_A, fake_B = sample_images(val_dataloader, uPiB_scaler, uFBP_scaler)
+            error_A, error_B, cor, fake_A, fake_B = sample_images(paired_data, uPiB_scaler, uFBP_scaler)
             if cor > max_cor:
                 max_cor = cor
                 cor_error_B = error_B

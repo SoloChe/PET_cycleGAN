@@ -41,6 +41,14 @@ parser.add_argument("--num_residual_blocks_generator", type=int, default=8, help
 parser.add_argument("--discriminator_width", type=int, default=128, help="width of the discriminator")
 parser.add_argument("--num_residual_blocks_discriminator", type=int, default=2, help="number of residual blocks in the discriminator")
 parser.add_argument("--log_path", type=str, default='./training_logs3', help="path to save log file")
+
+parser.add_argument("--finetune", type=int, default=0, help="whether finetune model")
+parser.add_argument("--finetune_lr", type=float, default=0.00001, help="finetune lr")
+parser.add_argument("--model_path", type=str, default='./model', help="path to load model")
+
+parser.add_argument("--SUVR", type=int, default=1, help="whether SUVR")
+
+
 opt = parser.parse_args()
 print(opt)
 
@@ -157,6 +165,16 @@ G_BA = Generater_MLP_Skip(input_dim, opt.generator_width, latent_dim, opt.num_re
 D_A = PatchMLPDiscriminator_1D_Res(opt.num_patch, patch_size=opt.patch_size, hidden_size=opt.discriminator_width, num_residual_blocks=opt.num_residual_blocks_discriminator)
 D_B = PatchMLPDiscriminator_1D_Res(opt.num_patch, patch_size=opt.patch_size, hidden_size=opt.discriminator_width, num_residual_blocks=opt.num_residual_blocks_discriminator)
 
+if opt.finetune == 1:
+    logger.info(f'Finetune model from saved model {opt.model_path}')
+    model_path = Path(opt.model_path)
+    G_AB.load_state_dict(torch.load(model_path / 'G_AB_Best.pth'))
+    G_BA.load_state_dict(torch.load(model_path / 'G_BA_Best.pth'))
+    D_A.load_state_dict(torch.load(model_path / 'D_A_Best.pth'))
+    D_B.load_state_dict(torch.load(model_path / 'D_B_Best.pth'))
+    
+    opt.lr = opt.finetune_lr
+
 
 G_AB = G_AB.to(device)
 G_BA = G_BA.to(device)
@@ -172,29 +190,53 @@ optimizer_D_A = torch.optim.AdamW(D_A.parameters(), lr=opt.lr, betas=(opt.b1, op
 optimizer_D_B = torch.optim.AdamW(D_B.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2))
 
 # Learning rate update schedulers
-lr_scheduler_G = torch.optim.lr_scheduler.LambdaLR(
-    optimizer_G, lr_lambda=LambdaLR(opt.n_epochs, opt.epoch, opt.decay_epoch).step
-)
-lr_scheduler_D_A = torch.optim.lr_scheduler.LambdaLR(
-    optimizer_D_A, lr_lambda=LambdaLR(opt.n_epochs, opt.epoch, opt.decay_epoch).step
-)
-lr_scheduler_D_B = torch.optim.lr_scheduler.LambdaLR(
-    optimizer_D_B, lr_lambda=LambdaLR(opt.n_epochs, opt.epoch, opt.decay_epoch).step
-)
+# lr_scheduler_G = torch.optim.lr_scheduler.LambdaLR(
+#     optimizer_G, lr_lambda=LambdaLR(opt.n_epochs, opt.epoch, opt.decay_epoch).step
+# )
+# lr_scheduler_D_A = torch.optim.lr_scheduler.LambdaLR(
+#     optimizer_D_A, lr_lambda=LambdaLR(opt.n_epochs, opt.epoch, opt.decay_epoch).step
+# )
+# lr_scheduler_D_B = torch.optim.lr_scheduler.LambdaLR(
+#     optimizer_D_B, lr_lambda=LambdaLR(opt.n_epochs, opt.epoch, opt.decay_epoch).step
+# )
+
+lr_scheduler_G = CosineAnnealingLR_with_Restart_WeightDecay(optimizer_G, T_max=5, T_mult=2, eta_min=0.00001, eta_max=opt.lr, decay=0.8)
+lr_scheduler_D_A = CosineAnnealingLR_with_Restart_WeightDecay(optimizer_D_A, T_max=5, T_mult=2, eta_min=0.00001, eta_max=opt.lr, decay=0.8)
+lr_scheduler_D_B = CosineAnnealingLR_with_Restart_WeightDecay(optimizer_D_B, T_max=5, T_mult=2, eta_min=0.00001, eta_max=opt.lr, decay=0.8)
 
 # data
-baseline = True if opt.baseline == 1 else False
-uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, uPiB_scaler, uFBP_scaler = read_data(normalize=False, separate=False, baseline=baseline)
+uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, uPiB_scaler, uFBP_scaler = read_data(normalize=False, separate=False, baseline=opt.baseline, SUVR=opt.SUVR)
 
 # pool
 fake_A_pool = ReplayBuffer(opt.pool_size)
 fake_B_pool = ReplayBuffer(opt.pool_size)
 
+#########test##########
+
+# if opt.finetune:
+#     folder_ft = "logs_ft3_3_batch_10_pool_500_patch_85_1_long"
+#     setup_ft="160_150_4_4_15.0_1.0_10.0"
+#     batchA0 = torch.load(f'./{folder_ft}/data/{setup_ft}/batch_A_0.pt')
+#     batchA1 = torch.load(f'./{folder_ft}/data/{setup_ft}/batch_A_1.pt')
+#     batchA6 = torch.load(f'./{folder_ft}/data/{setup_ft}/batch_A_6.pt')
+
+#     uFBP = torch.cat((batchA0, batchA1, batchA6)).numpy()
+
+#     batchB0 = torch.load(f'./{folder_ft}/data/{setup_ft}/batch_B_0.pt')
+#     batchB1 = torch.load(f'./{folder_ft}/data/{setup_ft}/batch_B_1.pt')
+#     batchB6 = torch.load(f'./{folder_ft}/data/{setup_ft}/batch_B_6.pt')
+
+#     uPiB = torch.cat((batchB0, batchB1, batchB6)).numpy()
+
+if opt.finetune:
+    uFBP = torch.load(f'./data_PET/core_uFBP.pt').numpy()
+    uPiB = torch.load(f'./data_PET/core_uPiB.pt').numpy()
+
 # ----------
 #  Training
 # ----------
 max_cor = -1e8
-resample ={0:False, 1:'matching', 2:'resample_to_n'}
+resample ={0:False, 1:'matching', 2:'resample_to_n', 3:'resample_tail'}
 
 for epoch in range(opt.epoch, opt.n_epochs):
 
@@ -295,6 +337,10 @@ for epoch in range(opt.epoch, opt.n_epochs):
                 torch.save(fake_A, f'./{data_save_path}/fake_A_Best.pt')
                 # save model
                 save_model(model_save_path, 'Best')
+                
+                if opt.finetune:
+                    torch.save(real_A, f'./{data_save_path}/batch_A_{epoch * len(unpaired_loader) + i}.pt')
+                    torch.save(real_B, f'./{data_save_path}/batch_B_{epoch * len(unpaired_loader) + i}.pt')
             
             logger.info("+" * 30)
             logger.info(f"Epoch: {epoch}, Batch: {i}, D loss: {loss_D.item():.4f}, G loss: {loss_G.item():.4f}, adv: {loss_GAN.item():.4f}, cycle: {loss_cycle.item():.4f}, identity: {loss_identity.item():.4f}, error_A: {error_A:.4f}, error_B: {error_B:.4f},  cor_A: {cor_A:.4f}, cor_B: {cor_B:.4f} ")

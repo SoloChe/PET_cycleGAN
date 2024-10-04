@@ -42,3 +42,25 @@ class LambdaLR:
 
     def step(self, epoch):
         return 1.0 - max(0, epoch + self.offset - self.decay_start_epoch) / (self.n_epochs - self.decay_start_epoch)
+    
+class CosineAnnealingLR_with_Restart_WeightDecay:
+    def __init__(self, optimizer, T_max, T_mult=1, eta_min=0, eta_max=0.1, decay=0.9):
+        self.optimizer = optimizer
+        self.decay = decay
+        self.T_max = T_max
+        self.T_mult = T_mult
+        self.eta_min = eta_min
+        self.eta_max = eta_max
+        self.T_cur = 0
+
+    def step(self):
+        self.T_cur += 1
+        if self.T_cur >= self.T_max:
+            self.T_cur = 0
+            self.eta_max *= self.decay
+            self.T_max *= self.T_mult
+            
+            
+        lr = self.eta_min + (0.5 * (self.eta_max-self.eta_min) * (1 + np.cos(np.pi * self.T_cur / self.T_max)))
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = lr

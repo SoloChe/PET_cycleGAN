@@ -4,64 +4,130 @@ import numpy as np
 import itertools
 import random
 
+import pandas as pd
 from models import *
 from utils import *
+
 # from data import get_data_loaders, get_unpaired_blood
 from data_PET import get_data_loaders, read_data
 from MCSUVR import load_weights, cal_MCSUVR_torch, cal_correlation
+
 # from model1D_new import define_G
 # from pool import ImagePool
 
 import torch
-
+from sklearn.linear_model import LinearRegression
 import logging
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--epoch", type=int, default=0, help="epoch to start training from")
-parser.add_argument("--n_epochs", type=int, default=500, help="number of epochs of training")
-parser.add_argument("--dataset_name", type=str, default="PET", help="name of the dataset")
+parser.add_argument(
+    "--n_epochs", type=int, default=500, help="number of epochs of training"
+)
+parser.add_argument(
+    "--dataset_name", type=str, default="PET", help="name of the dataset"
+)
 parser.add_argument("--batch_size", type=int, default=128, help="size of the batches")
 parser.add_argument("--lr", type=float, default=0.0002, help="adam: learning rate")
-parser.add_argument("--b1", type=float, default=0.9, help="adamw: decay of first order momentum of gradient")
-parser.add_argument("--b2", type=float, default=0.999, help="adamw: decay of first order momentum of gradient")
-parser.add_argument("--decay_epoch", type=int, default=100, help="epoch from which to start lr decay")
-parser.add_argument("--sample_interval", type=int, default=10, help="interval between saving generator outputs")
+parser.add_argument(
+    "--b1",
+    type=float,
+    default=0.9,
+    help="adamw: decay of first order momentum of gradient",
+)
+parser.add_argument(
+    "--b2",
+    type=float,
+    default=0.999,
+    help="adamw: decay of first order momentum of gradient",
+)
+parser.add_argument(
+    "--decay_epoch", type=int, default=100, help="epoch from which to start lr decay"
+)
+parser.add_argument(
+    "--sample_interval",
+    type=int,
+    default=10,
+    help="interval between saving generator outputs",
+)
 parser.add_argument("--lambda_cyc", type=float, default=10.0, help="cycle loss weight")
 parser.add_argument("--lambda_id", type=float, default=5.0, help="identity loss weight")
 parser.add_argument("--lambda_mc", type=float, default=5.0, help="MCSUVR loss weight")
-parser.add_argument("--pool_size", type=int, default=50, help="size of image buffer that stores previously generated images")
-parser.add_argument("--patch_size", type=int, default=85, help="size of patch for patchGAN discriminator")
-parser.add_argument("--num_patch", type=int, default=1, help="number of patch for patchGAN discriminator")
+parser.add_argument(
+    "--pool_size",
+    type=int,
+    default=50,
+    help="size of image buffer that stores previously generated images",
+)
+parser.add_argument(
+    "--patch_size",
+    type=int,
+    default=85,
+    help="size of patch for patchGAN discriminator",
+)
+parser.add_argument(
+    "--num_patch",
+    type=int,
+    default=1,
+    help="number of patch for patchGAN discriminator",
+)
 
 parser.add_argument("--baseline", type=int, default=0, help="whether baseline model")
 
 parser.add_argument("--resample", type=int, default=0, help="resample unpaired data")
-parser.add_argument("--generator_width", type=int, default=512, help="width of the generator")
-parser.add_argument("--num_residual_blocks_generator", type=int, default=8, help="number of residual blocks in the generator")
-parser.add_argument("--discriminator_width", type=int, default=128, help="width of the discriminator")
-parser.add_argument("--num_residual_blocks_discriminator", type=int, default=2, help="number of residual blocks in the discriminator")
-parser.add_argument("--log_path", type=str, default='./training_logs3', help="path to save log file")
+parser.add_argument(
+    "--generator_width", type=int, default=512, help="width of the generator"
+)
+parser.add_argument(
+    "--num_residual_blocks_generator",
+    type=int,
+    default=8,
+    help="number of residual blocks in the generator",
+)
+parser.add_argument(
+    "--discriminator_width", type=int, default=128, help="width of the discriminator"
+)
+parser.add_argument(
+    "--num_residual_blocks_discriminator",
+    type=int,
+    default=2,
+    help="number of residual blocks in the discriminator",
+)
+parser.add_argument(
+    "--log_path", type=str, default="./training_logs3", help="path to save log file"
+)
 
 parser.add_argument("--finetune", type=int, default=0, help="whether finetune model")
 parser.add_argument("--finetune_lr", type=float, default=0.00001, help="finetune lr")
-parser.add_argument("--model_path", type=str, default='./model', help="path to load model")
+parser.add_argument(
+    "--model_path", type=str, default="./model", help="path to saved model"
+)
+parser.add_argument(
+    "--data_path", type=str, default="./data", help="path to saved data"
+)
+parser.add_argument(
+    "--max_cor", type=float, default=-1, help="initialization of max correlation"
+)
 
 parser.add_argument("--SUVR", type=int, default=1, help="whether SUVR")
+
+parser.add_argument("--seed", type=int, default=0, help="random seed, default=0")
+parser.add_argument("--shuffle", type=int, default=1, help="shuffle data, default=1")
 
 
 opt = parser.parse_args()
 print(opt)
 
 # set random seed
-torch.manual_seed(0)
-np.random.seed(0)
-random.seed(0)
+torch.manual_seed(opt.seed)
+np.random.seed(opt.seed)
+random.seed(opt.seed)
 # Ensure deterministic behavior in PyTorch
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
 ######################
-MCSUVR_WEIGHT, _, REGION_INDEX = load_weights()
+REGION_INDEX = load_weights()
 ######################
 
 
@@ -70,55 +136,106 @@ def save_model(model_save_path, suffix):
     torch.save(G_BA.state_dict(), model_save_path / f"G_BA_{suffix}.pth")
     torch.save(D_A.state_dict(), model_save_path / f"D_A_{suffix}.pth")
     torch.save(D_B.state_dict(), model_save_path / f"D_B_{suffix}.pth")
-    
-def sample_images(paired, uPiB_scaler=None, uFBP_scaler=None):
+
+def sample(
+    paired_val, # OASIS
+    paired_test, # C
+):
     """Saves a generated sample from the test set"""
-    
-    assert paired[0].shape[0] == paired[1].shape[0] == 46
+
+    MCSUVR_WEIGHT_PAIRED_VAL = paired_val[2]
+    MCSUVR_WEIGHT_PAIRED_TEST = paired_test[2]
+
     G_AB.eval()
     G_BA.eval()
-    
-    with torch.no_grad():
-        real_A = paired[0].to(device) # FBP
-        fake_B = G_AB(real_A) # Fake PiB
-        real_B = paired[1].to(device) # PiB
-        fake_A = G_BA(real_B) # Fake FBP
-        
-        if uPiB_scaler is not None and uFBP_scaler is not None:
-            real_A = torch.from_numpy(uFBP_scaler.inverse_transform(real_A.cpu().numpy()))
-            real_B = torch.from_numpy(uPiB_scaler.inverse_transform(real_B.cpu().numpy()))
-            fake_A = torch.from_numpy(uFBP_scaler.inverse_transform(fake_A.cpu().numpy()))
-            fake_B = torch.from_numpy(uPiB_scaler.inverse_transform(fake_B.cpu().numpy()))
-    
-        REAL_MCSUVR_B = cal_MCSUVR_torch(real_B, REGION_INDEX, MCSUVR_WEIGHT)
-        FAKE_MCSUVR_B = cal_MCSUVR_torch(fake_B, REGION_INDEX, MCSUVR_WEIGHT)
-        cor_B = cal_correlation(REAL_MCSUVR_B.cpu().numpy(), FAKE_MCSUVR_B.cpu().numpy())
-        
-        REAL_MCSUVR_A = cal_MCSUVR_torch(real_A, REGION_INDEX, MCSUVR_WEIGHT)
-        FAKE_MCSUVR_A = cal_MCSUVR_torch(fake_A, REGION_INDEX, MCSUVR_WEIGHT)
-        cor_A = cal_correlation(REAL_MCSUVR_A.cpu().numpy(), FAKE_MCSUVR_A.cpu().numpy())
-        
-        # calculate relative error
-        error_A = torch.mean(torch.abs(fake_A - real_A) / (real_A+1e-8)) 
-        error_B = torch.mean(torch.abs(fake_B - real_B) / (real_B+1e-8))
-        
-        
-    return error_A, error_B, cor_A, cor_B, fake_A, fake_B
 
-def MCSUVR_loss(fake_A, real_A, fake_B, real_B, REGION_INDEX):
-    mcsuvr_loss_A  = [criterion_MCSUVR(fake_A[:,i], real_A[:,i]) for i in REGION_INDEX.values()]
-    mcsuvr_loss_B  = [criterion_MCSUVR(fake_B[:,i], real_B[:,i]) for i in REGION_INDEX.values()]
-    mcsuvr_loss = torch.stack(mcsuvr_loss_A + mcsuvr_loss_B)
-    assert mcsuvr_loss.shape[0] == 7*2, f'Error in MCSUVR loss shape: {mcsuvr_loss.shape[0]}'
-    return torch.mean(mcsuvr_loss)
+    with torch.no_grad():
+        real_A_val = paired_val[0].to(device)  # FBP
+        real_B_val = paired_val[1].to(device)  # PiB
+        fake_B_val = G_AB(real_A_val)  # Fake PiB
+        fake_A_val = G_BA(fake_B_val)  # Fake FBP
+
+        real_A_test = paired_test[0].to(device)  # FBP
+        real_B_test = paired_test[1].to(device)  # PiB
+        fake_B_test = G_AB(real_A_test)  # Fake PiB
+        fake_A_test = G_BA(fake_B_test)  # Fake FBP
+
+        # PiB val
+        REAL_MCSUVR_B_VAL = cal_MCSUVR_torch(
+            real_B_val, REGION_INDEX, MCSUVR_WEIGHT_PAIRED_VAL
+        )
+        FAKE_MCSUVR_B_val = cal_MCSUVR_torch(
+            fake_B_val, REGION_INDEX, MCSUVR_WEIGHT_PAIRED_VAL
+        )
+        cor_B_val = cal_correlation(
+            REAL_MCSUVR_B_VAL.cpu().numpy(), FAKE_MCSUVR_B_val.cpu().numpy()
+        )
+
+        # PiB test
+        REAL_MCSUVR_B_TEST = cal_MCSUVR_torch(
+            real_B_test, REGION_INDEX, MCSUVR_WEIGHT_PAIRED_TEST
+        )
+        FAKE_MCSUVR_B_TEST = cal_MCSUVR_torch(
+            fake_B_test, REGION_INDEX, MCSUVR_WEIGHT_PAIRED_TEST
+        )
+        cor_B_test = cal_correlation(
+            REAL_MCSUVR_B_TEST.cpu().numpy(), FAKE_MCSUVR_B_TEST.cpu().numpy()
+        )
+
+        # calculate relative error
+        error_B_val = torch.mean(torch.abs(fake_B_val - real_B_val) / (real_B_val + 1e-8))
+        error_B_test = torch.mean(torch.abs(fake_B_test - real_B_test) / (real_B_test + 1e-8))
+        error_A_val = torch.mean(torch.abs(fake_A_val - real_A_val) / (real_A_val + 1e-8))
+        error_A_test = torch.mean(torch.abs(fake_A_test - real_A_test) / (real_A_test + 1e-8))
+
+    return (
+        error_A_val,
+        error_B_val,
+        error_A_test,
+        error_B_test,
+        cor_B_val,
+        cor_B_test,
+        fake_A_val,
+        fake_B_val,
+        fake_A_test,
+        fake_B_test,
+    )
+
+
+# def MCSUVR_Loss(real_B, reconv_B, weight):
+#     real_mcsuvr = cal_MCSUVR_torch(real_B, REGION_INDEX, weight).reshape(-1, 1)
+#     fake_mcsuvr = cal_MCSUVR_torch(reconv_B, REGION_INDEX, weight).reshape(-1, 1)
+#     cos = nn.CosineSimilarity(dim=0, eps=1e-6)
+#     pearson = cos(real_mcsuvr - real_mcsuvr.mean(), fake_mcsuvr - fake_mcsuvr.mean())
+#     return -pearson
+
+
+# def MCSUVR_Loss(fake_B, weight):
+#     fake_mcsuvr = cal_MCSUVR_torch(fake_B, REGION_INDEX, weight).reshape(-1, 1)
+#     fake_mean = fake_mcsuvr - fake_mcsuvr.mean()
+#     var = torch.sqrt(torch.sum(fake_mean**2))
+#     return var
+
+# def MCSUVR_Loss2(fake_B):
+#     mcsuvr_loss_B  = [fake_B[:,i] for i in REGION_INDEX.values()]
+#     mcsuvr_loss = torch.stack(mcsuvr_loss_B).var(dim=0).sum()
+#     return mcsuvr_loss
+
+
+# def MCSUVR_loss(fake_A, real_A, fake_B, real_B, REGION_INDEX):
+#     mcsuvr_loss_A  = [criterion_MCSUVR(fake_A[:,i], real_A[:,i]) for i in REGION_INDEX.values()]
+#     mcsuvr_loss_B  = [criterion_MCSUVR(fake_B[:,i], real_B[:,i]) for i in REGION_INDEX.values()]
+#     mcsuvr_loss = torch.stack(mcsuvr_loss_A + mcsuvr_loss_B)
+#     assert mcsuvr_loss.shape[0] == 7*2, f'Error in MCSUVR loss shape: {mcsuvr_loss.shape[0]}'
+#     return torch.mean(mcsuvr_loss)
 
 # path
 log_path = Path(opt.log_path)
-training_setup = f'{opt.generator_width}_{opt.discriminator_width}_{opt.num_residual_blocks_generator}_{opt.num_residual_blocks_discriminator}_{opt.lambda_cyc}_{opt.lambda_id}_{opt.lambda_mc}'
+training_setup = f"{opt.generator_width}_{opt.discriminator_width}_{opt.num_residual_blocks_generator}_{opt.num_residual_blocks_discriminator}_{opt.lambda_cyc}_{opt.lambda_id}_{opt.lambda_mc}"
 
-log_setup_path = log_path / 'log' / training_setup
-model_save_path = log_path / 'saved_model' / training_setup
-data_save_path = log_path / 'data' / training_setup
+log_setup_path = log_path / "log" / training_setup
+model_save_path = log_path / "saved_model" / training_setup
+data_save_path = log_path / "data" / training_setup
 if not log_setup_path.exists():
     log_setup_path.mkdir(parents=True, exist_ok=True)
 if not model_save_path.exists():
@@ -132,21 +249,25 @@ logger.setLevel(logging.INFO)
 # File handler
 file_handler = logging.FileHandler(log_setup_path / "training.log")
 file_handler.setLevel(logging.INFO)
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+file_handler.setFormatter(
+    logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+)
 # Console handler
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
-console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+console_handler.setFormatter(
+    logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+)
 # Add handlers to the logger
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
-logger.info('Training started')
-    
+logger.info("Training started")
+
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = 'cpu'
+device = "cpu"
 
 # Losses
-criterion_GAN =GANLoss('vanilla')
+criterion_GAN = GANLoss("vanilla")
 criterion_cycle = torch.nn.L1Loss()
 criterion_identity = torch.nn.L1Loss()
 
@@ -154,26 +275,43 @@ criterion_identity = torch.nn.L1Loss()
 criterion_MCSUVR = torch.nn.MSELoss()
 # criterion_MCSUVR = torch.nn.L1Loss()
 
-
-# input_shape = (opt.channels, opt.img_height, opt.img_width)
 input_dim = 85
 latent_dim = 85
 # Initialize generator and discriminator
-G_AB = Generater_MLP_Skip(input_dim, opt.generator_width, latent_dim, opt.num_residual_blocks_generator)
-G_BA = Generater_MLP_Skip(input_dim, opt.generator_width, latent_dim, opt.num_residual_blocks_generator)   
+G_AB = Generater_MLP_Skip(
+    input_dim, opt.generator_width, latent_dim, opt.num_residual_blocks_generator
+)
+G_BA = Generater_MLP_Skip(
+    input_dim, opt.generator_width, latent_dim, opt.num_residual_blocks_generator
+)
 
-D_A = PatchMLPDiscriminator_1D_Res(opt.num_patch, patch_size=opt.patch_size, hidden_size=opt.discriminator_width, num_residual_blocks=opt.num_residual_blocks_discriminator)
-D_B = PatchMLPDiscriminator_1D_Res(opt.num_patch, patch_size=opt.patch_size, hidden_size=opt.discriminator_width, num_residual_blocks=opt.num_residual_blocks_discriminator)
+D_A = PatchMLPDiscriminator_1D_Res(
+    opt.num_patch,
+    patch_size=opt.patch_size,
+    hidden_size=opt.discriminator_width,
+    num_residual_blocks=opt.num_residual_blocks_discriminator,
+)
+D_B = PatchMLPDiscriminator_1D_Res(
+    opt.num_patch,
+    patch_size=opt.patch_size,
+    hidden_size=opt.discriminator_width,
+    num_residual_blocks=opt.num_residual_blocks_discriminator,
+)
 
-if opt.finetune == 1:
-    logger.info(f'Finetune model from saved model {opt.model_path}')
-    model_path = Path(opt.model_path)
-    G_AB.load_state_dict(torch.load(model_path / 'G_AB_Best.pth'))
-    G_BA.load_state_dict(torch.load(model_path / 'G_BA_Best.pth'))
-    D_A.load_state_dict(torch.load(model_path / 'D_A_Best.pth'))
-    D_B.load_state_dict(torch.load(model_path / 'D_B_Best.pth'))
-    
-    opt.lr = opt.finetune_lr
+# if opt.finetune == 1:
+#     logger.info(f"Finetune model from saved model {opt.model_path}")
+#     model_path = Path(opt.model_path)
+#     G_AB.load_state_dict(torch.load(model_path / "G_AB_Best_Cor.pth"))
+#     G_BA.load_state_dict(torch.load(model_path / "G_BA_Best_Cor.pth"))
+#     D_A.load_state_dict(torch.load(model_path / "D_A_Best_Cor.pth"))
+#     D_B.load_state_dict(torch.load(model_path / "D_B_Best_Cor.pth"))
+
+#     opt.lr = opt.finetune_lr
+#     # data_path = Path(opt.data_path)
+#     # fake_PiB_nft = torch.load(data_path/'fake_B_Best.pt')
+#     fake_PiB_nft = None
+# else:
+#     fake_PiB_nft = None
 
 
 G_AB = G_AB.to(device)
@@ -181,76 +319,87 @@ G_BA = G_BA.to(device)
 D_A = D_A.to(device)
 D_B = D_B.to(device)
 
-
 # Optimizers
 optimizer_G = torch.optim.AdamW(
-    itertools.chain(G_AB.parameters(), G_BA.parameters()), lr=opt.lr, betas=(opt.b1, opt.b2)
+    itertools.chain(G_AB.parameters(), G_BA.parameters()),
+    lr=opt.lr,
+    betas=(opt.b1, opt.b2),
 )
 optimizer_D_A = torch.optim.AdamW(D_A.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2))
 optimizer_D_B = torch.optim.AdamW(D_B.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2))
 
-# Learning rate update schedulers
-# lr_scheduler_G = torch.optim.lr_scheduler.LambdaLR(
-#     optimizer_G, lr_lambda=LambdaLR(opt.n_epochs, opt.epoch, opt.decay_epoch).step
-# )
-# lr_scheduler_D_A = torch.optim.lr_scheduler.LambdaLR(
-#     optimizer_D_A, lr_lambda=LambdaLR(opt.n_epochs, opt.epoch, opt.decay_epoch).step
-# )
-# lr_scheduler_D_B = torch.optim.lr_scheduler.LambdaLR(
-#     optimizer_D_B, lr_lambda=LambdaLR(opt.n_epochs, opt.epoch, opt.decay_epoch).step
-# )
+# Learning rate schedulers
+lr_scheduler_G = CosineAnnealingLR_with_Restart_WeightDecay(
+    optimizer_G, T_max=5, T_mult=2, eta_min=0.00001, eta_max=opt.lr, decay=0.8
+)
+lr_scheduler_D_A = CosineAnnealingLR_with_Restart_WeightDecay(
+    optimizer_D_A, T_max=5, T_mult=2, eta_min=0.00001, eta_max=opt.lr, decay=0.8
+)
+lr_scheduler_D_B = CosineAnnealingLR_with_Restart_WeightDecay(
+    optimizer_D_B, T_max=5, T_mult=2, eta_min=0.00001, eta_max=opt.lr, decay=0.8
+)
 
-lr_scheduler_G = CosineAnnealingLR_with_Restart_WeightDecay(optimizer_G, T_max=5, T_mult=2, eta_min=0.00001, eta_max=opt.lr, decay=0.8)
-lr_scheduler_D_A = CosineAnnealingLR_with_Restart_WeightDecay(optimizer_D_A, T_max=5, T_mult=2, eta_min=0.00001, eta_max=opt.lr, decay=0.8)
-lr_scheduler_D_B = CosineAnnealingLR_with_Restart_WeightDecay(optimizer_D_B, T_max=5, T_mult=2, eta_min=0.00001, eta_max=opt.lr, decay=0.8)
+# read all data
+(
+    uPiB,
+    uFBP,
+    pPiB,
+    pFBP,
+    uPiB_CL,
+    uFBP_CL,
+    pPiB_CL,
+    pFBP_CL,
+    uPiB_scaler,
+    uFBP_scaler,
+    pWeight,
+    uWeight,
+) = read_data(normalize=False)
 
-# data
-uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, uPiB_scaler, uFBP_scaler = read_data(normalize=False, separate=False, baseline=opt.baseline, SUVR=opt.SUVR)
+
+# ----------
+#  Training
+# ----------
+max_cor_B_val = opt.max_cor
+min_error_B_val = 100
 
 # pool
 fake_A_pool = ReplayBuffer(opt.pool_size)
 fake_B_pool = ReplayBuffer(opt.pool_size)
 
-#########test##########
-
-# if opt.finetune:
-#     folder_ft = "logs_ft3_3_batch_10_pool_500_patch_85_1_long"
-#     setup_ft="160_150_4_4_15.0_1.0_10.0"
-#     batchA0 = torch.load(f'./{folder_ft}/data/{setup_ft}/batch_A_0.pt')
-#     batchA1 = torch.load(f'./{folder_ft}/data/{setup_ft}/batch_A_1.pt')
-#     batchA6 = torch.load(f'./{folder_ft}/data/{setup_ft}/batch_A_6.pt')
-
-#     uFBP = torch.cat((batchA0, batchA1, batchA6)).numpy()
-
-#     batchB0 = torch.load(f'./{folder_ft}/data/{setup_ft}/batch_B_0.pt')
-#     batchB1 = torch.load(f'./{folder_ft}/data/{setup_ft}/batch_B_1.pt')
-#     batchB6 = torch.load(f'./{folder_ft}/data/{setup_ft}/batch_B_6.pt')
-
-#     uPiB = torch.cat((batchB0, batchB1, batchB6)).numpy()
-
-if opt.finetune:
-    uFBP = torch.load(f'./data_PET/core_uFBP.pt').numpy()
-    uPiB = torch.load(f'./data_PET/core_uPiB.pt').numpy()
-
-# ----------
-#  Training
-# ----------
-max_cor = -1e8
-resample ={0:False, 1:'matching', 2:'resample_to_n', 3:'resample_tail'}
+resample = {
+    0: False,
+    1: "matching",
+    2: "resample_to_n",
+    3: "resample_tail",
+    4: "resample_CL_threshold",
+}
 
 for epoch in range(opt.epoch, opt.n_epochs):
 
     # data loader
     # resample for each epoch
-    paired_data, unpaired_loader = get_data_loaders(uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, 
-                                                 opt.batch_size, resample=resample[opt.resample])
-  
+    paired_test, paired_val, unpaired_loader = get_data_loaders(
+        uPiB,
+        uFBP,
+        pPiB,
+        pFBP,
+        uPiB_CL,
+        uFBP_CL,
+        pWeight,
+        uWeight,
+        opt.batch_size,
+        resample=resample[opt.resample],
+        shuffle=opt.shuffle,
+    )
+    logger.info(f"paired_test: {paired_test[0].shape}, paired_val: {paired_val[0].shape}")
+    
     for i, batch in enumerate(unpaired_loader):
 
         # Set model input
         real_A = batch[0].to(device)
         real_B = batch[1].to(device)
-        
+        uW = batch[2].to(device)
+
         # ------------------
         #  Train Generators
         # ------------------
@@ -273,16 +422,23 @@ for epoch in range(opt.epoch, opt.n_epochs):
         # Cycle loss
         recov_A = G_BA(fake_B)
         loss_cycle_A = criterion_cycle(recov_A, real_A)
-        
+
         recov_B = G_AB(fake_A)
         loss_cycle_B = criterion_cycle(recov_B, real_B)
         loss_cycle = (loss_cycle_A + loss_cycle_B) / 2
-        
+
         # MCSUVR loss
-        loss_MCSUVR = MCSUVR_loss(recov_A, real_A, recov_B, real_B, REGION_INDEX)
-        
+        # if opt.lambda_mc > 0:
+        #     loss_MCSUVR = MCSUVR_Loss(recov_B, real_B, uW)
+        #     # loss_MCSUVR = MCSUVR_Loss(recov_B, uW)
+        #     # loss_MCSUVR = MCSUVR_Loss2(fake_B)
+        # else:
+        #     loss_MCSUVR = torch.tensor([0])
+
         # Total loss
-        loss_G = loss_GAN + opt.lambda_cyc * loss_cycle + opt.lambda_id * loss_identity + opt.lambda_mc * loss_MCSUVR
+        loss_G = (
+            loss_GAN + opt.lambda_cyc * loss_cycle + opt.lambda_id * loss_identity
+        )  # + opt.lambda_mc * loss_MCSUVR
         loss_G.backward()
         optimizer_G.step()
 
@@ -313,7 +469,7 @@ for epoch in range(opt.epoch, opt.n_epochs):
         loss_D_B = (loss_real + loss_fake) / 2
         loss_D_B.backward()
         optimizer_D_B.step()
-        
+
         loss_D = (loss_D_A + loss_D_B) / 2
 
         # --------------
@@ -326,33 +482,74 @@ for epoch in range(opt.epoch, opt.n_epochs):
 
         # If at sample interval save image
         if batches_done % opt.sample_interval == 0:
-            error_A, error_B, cor_A, cor_B, fake_A, fake_B = sample_images(paired_data, uPiB_scaler, uFBP_scaler)
-            if cor_B > max_cor:
-                max_cor = cor_B
-                cor_cor_A = cor_A
-                cor_error_B = error_B
-                cor_error_A = error_A
-                # save tensors
-                torch.save(fake_B, f'./{data_save_path}/fake_B_Best.pt')
-                torch.save(fake_A, f'./{data_save_path}/fake_A_Best.pt')
-                # save model
-                save_model(model_save_path, 'Best')
+            (
+                error_A_val,
+                error_B_val,
+                error_A_test,
+                error_B_test,
+                cor_B_val,
+                cor_B_test,
+                fake_A_val,
+                fake_B_val,
+                fake_A_test,
+                fake_B_test,
+            ) = sample(
+                paired_val,
+                paired_test
+            )
+
+            # Save two models, i.e., best correlation and best error
+            if cor_B_val > max_cor_B_val:
+                max_cor_B_val = cor_B_val
+                max_cor_B_test = cor_B_test
                 
-                if opt.finetune:
-                    torch.save(real_A, f'./{data_save_path}/batch_A_{epoch * len(unpaired_loader) + i}.pt')
-                    torch.save(real_B, f'./{data_save_path}/batch_B_{epoch * len(unpaired_loader) + i}.pt')
-            
+                max_cor_B_error_B_val = error_B_val
+                max_cor_B_error_A_val = error_A_val
+                max_cor_B_error_B_test = error_B_test
+                max_cor_B_error_A_test = error_A_test
+                
+                # save tensors
+                torch.save(fake_B_val, f"./{data_save_path}/fake_B_val_Best_Cor.pt")
+                torch.save(fake_B_test, f"./{data_save_path}/fake_B_test_Best_Cor.pt")
+                # save model
+                save_model(model_save_path, "Best_Cor")
+
+            if error_B_val < min_error_B_val:
+                min_error_B_val = error_B_val
+                min_error_B_test = error_B_test
+                min_error_B_cor_B_val = cor_B_val
+                min_error_B_cor_B_test = cor_B_test
+
+                if not opt.finetune:
+                    # save tensors
+                    torch.save(fake_B_val, f"./{data_save_path}/fake_B_Best_MinB_val.pt")
+                    torch.save(fake_B_test, f"./{data_save_path}/fake_B_Best_MinB_test.pt")
+                    # save model
+                    save_model(model_save_path, "Best_MinB")
+
             logger.info("+" * 30)
-            logger.info(f"Epoch: {epoch}, Batch: {i}, D loss: {loss_D.item():.4f}, G loss: {loss_G.item():.4f}, adv: {loss_GAN.item():.4f}, cycle: {loss_cycle.item():.4f}, identity: {loss_identity.item():.4f}, error_A: {error_A:.4f}, error_B: {error_B:.4f},  cor_A: {cor_A:.4f}, cor_B: {cor_B:.4f} ")
+            logger.info(
+                f"Epoch: {epoch}, Batch: {i}, D loss: {loss_D.item():.4f}, G loss: {loss_G.item():.4f}, adv: {loss_GAN.item():.4f}, cycle: {loss_cycle.item():.4f}, identity: {loss_identity.item():.4f}, cor_B: {cor_B_val:.4f} "
+            )
             logger.info("-" * 30)
-            logger.info(f"max_cor_B: {max_cor:.4f}, cor_cor_A: {cor_cor_A:.4f}, cor_error_A: {cor_error_A:.4f}, cor_error_B: {cor_error_B:.4f}")
+            # make them have same space
+            logger.info(
+                f"max_cor_B_val:      {max_cor_B_val:.4f}, max_cor_err_B: {max_cor_B_error_B_val:.4f}"
+            )
+            logger.info(
+                f"max_cor_B_test:     {max_cor_B_test:.4f}, max_cor_err_B: {max_cor_B_error_B_test:.4f}"
+            )
+            logger.info(
+                f"min_err_cor_B_val:  {min_error_B_cor_B_val:.4f}, min_err_err_B: {min_error_B_val:.4f}"
+            )
+            logger.info(
+                f"min_err_cor_B_test: {min_error_B_cor_B_test:.4f}, min_err_err_B: {min_error_B_test:.4f}"
+            )
             logger.info("+" * 30)
             logger.info("")
-           
+
     # Update learning rates
-    lr_scheduler_G.step()
-    lr_scheduler_D_A.step()
-    lr_scheduler_D_B.step()
-    
-    
-   
+    if epoch > opt.decay_epoch:
+        lr_scheduler_G.step()
+        lr_scheduler_D_A.step()
+        lr_scheduler_D_B.step()

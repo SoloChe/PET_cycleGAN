@@ -297,6 +297,6 @@ class GANLoss(nn.Module):
     
     if __name__ == '__main__':
         model = PatchMLPDiscriminator_1D_Res(17, 5, 100, 2)
-        input = torch.randn(32, 85)
+        input = torch.randn(32, 86)
         output = model(input)
         print(output.size())

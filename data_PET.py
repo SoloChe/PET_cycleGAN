@@ -3,88 +3,11 @@ import torch.nn.functional as F
 import torch
 from torch.utils.data import DataLoader, Dataset
 from sklearn.preprocessing import MinMaxScaler
-
+from scipy.stats import ks_2samp
 import pandas as pd
 import numpy as np
+from resample import distribution_matching, resample_to_n, resample_tail, resample_CL_threshold, to_np_float
 
-def to_np_float(x):
-    return x.to_numpy().astype(float)
-
-# Resample sequences to match the largest bin size
-def distribution_matching(sequence1, sequence2, hist1, hist2, bin_edges):
-    resampled_sequence1 = []
-    resampled_indices1 = []
-    resampled_sequence2 = []
-    resampled_indices2 = []
-    for count1, count2, (start, end) in zip(hist1, hist2, zip(bin_edges[:-1], bin_edges[1:])):
-        if count1 > 0 and count2 > 0:
-            bin_indices1 = np.where((sequence1 >= start) & (sequence1 < end))[0]
-            bin_indices2 = np.where((sequence2 >= start) & (sequence2 < end))[0]
-            
-            if count1 > count2:
-                indices = np.random.choice(bin_indices2, count1-count2, replace=True)
-                resampled_sequence2.extend(sequence2[indices])
-                resampled_indices2.extend(indices)
-            elif count2 > count1:
-                indices = np.random.choice(bin_indices1, count2-count1, replace=True)
-                resampled_sequence1.extend(sequence1[indices])
-                resampled_indices1.extend(indices)
-    return np.array(resampled_indices1), np.array(resampled_indices2)
-
-# resample 1000 for each bin
-def resample_to_n(sequence1, sequence2, hist1, hist2, bin_edges, n=1000):
-    resampled_sequence1 = []
-    resampled_indices1 = []
-    resampled_sequence2 = []
-    resampled_indices2 = []
-    for count1, count2, (start, end) in zip(hist1, hist2, zip(bin_edges[:-1], bin_edges[1:])):
-        if count1 > 0 and count2 > 0:
-            bin_indices1 = np.where((sequence1 >= start) & (sequence1 < end))[0]
-            bin_indices2 = np.where((sequence2 >= start) & (sequence2 < end))[0]
-            
-            indices = np.random.choice(bin_indices2, n, replace=True)
-            resampled_sequence2.extend(sequence2[indices])
-            resampled_indices2.extend(indices)
-        
-            indices = np.random.choice(bin_indices1, n, replace=True)
-            resampled_sequence1.extend(sequence1[indices])
-            resampled_indices1.extend(indices)
-    return np.array(resampled_indices1), np.array(resampled_indices2)
-
-# resample CL > 25 for fine-tuning
-def resample_tail(sequence1, sequence2, hist1, hist2, bin_edges, n1=1000, n2=200):
-    # 1000 200
-    resampled_sequence1 = []
-    resampled_indices1 = []
-    resampled_sequence2 = []
-    resampled_indices2 = []
-    for count1, count2, (start, end) in zip(hist1, hist2, zip(bin_edges[:-1], bin_edges[1:])):
-        if count1 > 0 and count2 > 0:
-            bin_indices1 = np.where((sequence1 >= start) & (sequence1 < end))[0]
-            bin_indices2 = np.where((sequence2 >= start) & (sequence2 < end))[0]
-            
-            if start > 50:
-                indices1 = np.random.choice(bin_indices1, n1, replace=True)
-                indices2 = np.random.choice(bin_indices2, n1, replace=True)
-            else:
-                indices1 = np.random.choice(bin_indices1, n2, replace=True)
-                indices2 = np.random.choice(bin_indices2, n2, replace=True)
-            
-            resampled_sequence1.extend(sequence1[indices1])
-            resampled_indices1.extend(indices1)
-            resampled_sequence2.extend(sequence2[indices2])
-            resampled_indices2.extend(indices2)
-    return np.array(resampled_indices1), np.array(resampled_indices2)
-
-def resample_CL_threshold(sequence1, sequence2, CL_threshold, greater=True):
-    
-    if greater:
-        mask1 = sequence1 > CL_threshold
-        mask2 = sequence2 > CL_threshold
-    else:
-        mask1 = sequence1 <= CL_threshold
-        mask2 = sequence2 <= CL_threshold
-    return np.where(mask1)[0], np.where(mask2)[0]
 
 def get_vox_weight():
     # non sep. vox weight dataset
@@ -120,7 +43,7 @@ def get_vox_weight():
         
     
     
-def read_data(normalize=False):
+def read_data(normalize=False, adding_CL=False, adding_demo=False):
     
     # non sep. SUVR dataset
     uPiB1_path = '/home/yche14/PET_cycleGAN/data_PET/unpaired/standard/PIB/AIBL_PIB_PUP.xlsx'
@@ -142,7 +65,9 @@ def read_data(normalize=False):
     uPiB5_CL = pd.read_excel('/home/yche14/PET_cycleGAN/data_PET/unpaired/standard/PIB/CLPIB_CL.xlsx', sheet_name='Sheet1')
     uFBP_CL = pd.read_excel(uFBP_path, sheet_name='Demo')
     
+    # Centiloid CL
     p_CL = pd.read_excel('/home/yche14/PET_cycleGAN/data_PET/paired/Centioid_Summary.xlsx', sheet_name='Sheet1')
+    # OASIS CL
     p_O_PIB_CL = pd.read_csv('/home/yche14/PET_cycleGAN/data_PET/paired/standard/PIB/OASIS_PIB_PUP_CL_selected.csv')
     p_O_FBP_CL = pd.read_csv('/home/yche14/PET_cycleGAN/data_PET/paired/standard/FBP/OASIS_FBP_CL_selected.csv')
     
@@ -162,77 +87,138 @@ def read_data(normalize=False):
     wadrc_QC = pd.read_excel(wadrc_path, sheet_name='WADRC_SUVR')[['ID', 'VQC_Error']]
     wrap_QC = pd.read_excel(wrap_path, sheet_name='Demo')[['ID', 'VQC_Error']]
     
-    # # sep. SUVR dataset
-    # uPiB1_sep_path = '/data/amciilab/processedDataset/OASIS/Oasis-PUP/results/PiB_IDS_SUVRLR.csv'
-    # uPiB2_sep_path = '/data/amciilab/processedDataset/AIBL/AIBL-PUP/results/PiB_IDS_SUVRLR.csv'
-    # uFBP_sep_path = '/data/amciilab/processedDataset/ADNI/ADNI-PUP/results/FBP/list_ADNI_FBP_SUVRLR.csv'
-    # pFBP_sep_path = '/data/amciilab/processedDataset/Centiloid/FBP_PIB/PUP_FBP/runExtract/list_id_SUVRLR.csv'
-    # pPiB_sep_path = '/data/amciilab/processedDataset/Centiloid/FBP_PIB/PUP_PIB/runExtract/list_id_SUVRLR.csv'
-    # # non sep. RSF dataset
-    # uPiB1_RSF_path = '/data/amciilab/processedDataset/AIBL/AIBL-PUP/results/PiB_IDS_SUVR_RSF.csv'
-    # uPiB2_RSF_path = '/data/amciilab/processedDataset/OASIS/Oasis-PUP/results/PiB_IDS_SUVR_RSF.csv'
-    # uPiB3_RSF_path = '/data/amciilab/ysu/Wisconsin/WRAP/PUP_PIB_WRAP/SUVR_results/ID_list_SUVR_RSF.csv'
-    # uPiB4_RSF_path = '/data/amciilab/ysu/Wisconsin/ADRC/PUP_PIB_WADRC/SUVR_results/ID_list_SUVR_RSF.csv'
-    # uPiB5_RSF_path = './data_PET/CLPIB_SUVR_RSF.csv'
-    # pPiB_RSF_path = '/data/amciilab/processedDataset/Centiloid/FBP_PIB/PUP_PIB/runExtract/list_id_SUVR_RSF.csv'
-    # pFBP_RSF_path = '/data/amciilab/processedDataset/Centiloid/FBP_PIB/PUP_FBP/runExtract/list_id_SUVR_RSF.csv'
+    # Demo data (age sex)
+    file_path = '/home/yche14/PET_cycleGAN/data_PET/demo'
+    aibl_demo = pd.read_excel(file_path + '/AIBL_PIB_PUP.xlsx', sheet_name='Sheet1')[['SID', 'Age at PIB Scan', 'PTGENDER']]
+    oasis_demo = pd.read_excel(file_path + '/OASIS_PIB_PUP.xlsx', sheet_name='Summary')[['PIB_ID', 'AgeatEntry', 'GENDER']]
+    wrap_demo = pd.read_excel(file_path + '/WRAP_SUVR.xlsx', sheet_name='Demo')[['ID', 'age_at_acquisition', 'sex']]
+    adrc_demo = pd.read_excel(file_path + '/WADRC_SUVR.xlsx', sheet_name='WADRC_SUVR')[['ID', 'Age', 'sex']]
+    clpib_demo = pd.read_excel(file_path + '/CLPIB_CL.xlsx', sheet_name='Sheet1')[['ID', 'Age', 'Sex']]
+    adni_demo = pd.read_excel(file_path + '/ALL-AV45-PUP-BAI-SUVR-11162023.xlsx', sheet_name='Demo')[['PUP ID', 'Age at AV45 Scan', 'Gender']]
+    paired_demo = pd.read_excel('/home/yche14/PET_cycleGAN/data_PET/demo/FBP-PIB_Demographics_Centiloid.xlsx', sheet_name='Sheet1')[['ID', 'Age', 'Sex']]
     
+    # be fucking consistent, please...
+    clpib_demo.loc[clpib_demo['Sex'] == 'Female', 'Sex'] = 2
+    clpib_demo.loc[clpib_demo['Sex'] == 'F', 'Sex'] = 2
+    clpib_demo.loc[clpib_demo['Sex'] == 'Male', 'Sex'] = 1
+    clpib_demo.loc[clpib_demo['Sex'] == 'M', 'Sex'] = 1
     
+    adrc_demo.loc[adrc_demo['sex'] == 'F', 'sex'] = 2
+    adrc_demo.loc[adrc_demo['sex'] == 'M', 'sex'] = 1
+   
+    wrap_demo.loc[wrap_demo['sex'] == 'F', 'sex'] = 2
+    wrap_demo.loc[wrap_demo['sex'] == 'M', 'sex'] = 1
+  
+    paired_demo.loc[paired_demo['Sex'] == 'F', 'Sex'] = 2
+    paired_demo.loc[paired_demo['Sex'] == 'M', 'Sex'] = 1
+        
     uPiB1 = pd.read_excel(uPiB1_path, sheet_name='AIBL_PIB_PUP')
     uPiB1 = uPiB1.merge(aibl_QC, left_on='ID', right_on='PUPID')
+    uPiB1 = uPiB1.merge(aibl_demo, left_on='ID', right_on='SID')
     uPiB1 = uPiB1[uPiB1['VQC_Error 2']==0]
-    uPiB1_CL = uPiB1_CL[uPiB1_CL['SID'].isin(uPiB1['ID'])]
     
+    uPiB1_DM_AGE = uPiB1['Age at PIB Scan'].copy()
+    uPiB1_DM_SEX = uPiB1['PTGENDER'].copy()
+    uPiB1_CL = uPiB1_CL[uPiB1_CL['SID'].isin(uPiB1['ID'])]
     assert uPiB1['ID'].equals(uPiB1_CL['SID'])
     
     uPiB2 = pd.read_csv(uPiB2_path)
     uPiB2 = uPiB2.merge(oasis_QC, left_on='ID', right_on='PIB_ID')
+    uPiB2 = uPiB2.merge(oasis_demo, left_on='ID', right_on='PIB_ID')
     uPiB2 = uPiB2[uPiB2['VQC_Error']==0]
-    uPiB2_CL = uPiB2_CL[uPiB2_CL['PIB_ID'].isin(uPiB2['ID'])]
     
+    uPiB2_DM_AGE = uPiB2['AgeatEntry'].copy()
+    uPiB2_DM_SEX = uPiB2['GENDER'].copy()
+    uPiB2_CL = uPiB2_CL[uPiB2_CL['PIB_ID'].isin(uPiB2['ID'])]
     assert uPiB2['ID'].equals(uPiB2_CL['PIB_ID'])
     
     
     uPiB3 = pd.read_csv(uPiB3_path)
     uPiB3 = uPiB3.merge(wrap_QC, left_on='ID', right_on='ID')
+    uPiB3 = uPiB3.merge(wrap_demo, left_on='ID', right_on='ID')
     uPiB3 = uPiB3[uPiB3['VQC_Error']==0]
+
+    uPiB3 = uPiB3.dropna()
+    uPiB3_DM_AGE = uPiB3['age_at_acquisition'].copy()
+    uPiB3_DM_SEX = uPiB3['sex'].astype(int).copy()
     uPiB3_CL = uPiB3_CL[uPiB3_CL['ID'].isin(uPiB3['ID'])]
-    
     assert uPiB3['ID'].equals(uPiB3_CL['ID'])
     
     uPiB4 = pd.read_csv(uPiB4_path)
     uPiB4 = uPiB4.merge(wadrc_QC, left_on='ID', right_on='ID')
+    uPiB4 = uPiB4.merge(adrc_demo, left_on='ID', right_on='ID')
     uPiB4 = uPiB4[uPiB4['VQC_Error']==0]
-    uPiB4_CL = uPiB4_CL[uPiB4_CL['ID'].isin(uPiB4['ID'])]
     
+    uPiB4_DM_AGE = uPiB4['Age'].copy()
+    uPiB4_DM_SEX = uPiB4['sex'].astype(int).copy()
+    uPiB4_CL = uPiB4_CL[uPiB4_CL['ID'].isin(uPiB4['ID'])]
     assert uPiB4['ID'].equals(uPiB4_CL['ID'])
     
     uPiB5 = pd.read_csv(uPiB5_path)
     uPiB5 = uPiB5.merge(cl_QC, left_on='ID', right_on='ID')
+    uPiB5 = uPiB5.merge(clpib_demo, left_on='ID', right_on='ID')
     uPiB5 = uPiB5[uPiB5['VQC_Error']==0]
+   
+    uPiB5 = uPiB5.dropna()
+    uPiB5_DM_AGE = uPiB5['Age'].copy()
+    uPiB5_DM_SEX = uPiB5['Sex'].astype(int).copy()
     uPiB5_CL = uPiB5_CL[uPiB5_CL['ID'].isin(uPiB5['ID'])]
-    
     assert uPiB5['ID'].equals(uPiB5_CL['ID'])
     
     uFBP = pd.read_excel(uFBP_path, sheet_name='ALL_AV45_PUP_BAI_SUVR')
     uFBP = uFBP.merge(adni_QC, left_on='PUP ID', right_on='PUP ID')
+    uFBP = uFBP.merge(adni_demo, left_on='PUP ID', right_on='PUP ID')
     uFBP = uFBP[uFBP['VQCError 2']==0]
-    uFBP_CL = uFBP_CL[uFBP_CL['PUP ID'].isin(uFBP['PUP ID'])]
     
+    uFBP_DM_AGE = uFBP['Age at AV45 Scan'].copy()
+    uFBP_DM_SEX = uFBP['Gender'].copy()
+    uFBP_CL = uFBP_CL[uFBP_CL['PUP ID'].isin(uFBP['PUP ID'])]
     assert uFBP['PUP ID'].equals(uFBP_CL['PUP ID'])
     
+    print(f'# of AIBL {uPiB1.shape}')
+    print(f'# of OASIS {uPiB2.shape}')
+    print(f'# of WRAP {uPiB3.shape}')
+    print(f'# of WADRC {uPiB4.shape}')
+    print(f'# of CLPIB {uPiB5.shape}')
+    print(f'# of ADNI {uFBP.shape}')
+    
+    
     pPiB1 = pd.read_csv(pPiB1_path)
+    pPiB1 = pPiB1.merge(paired_demo, left_on='ID', right_on='ID')
+    p1_DM_AGE = pPiB1['Age'].copy()
+    p1_DM_SEX = pPiB1['Sex'].astype(int).copy()
+    
     pPiB2 = pd.read_csv(pPiB2_path)
+    pPiB2 = pPiB2.merge(oasis_demo, left_on='ID', right_on='PIB_ID')
+    p2_DM_AGE = pPiB2['AgeatEntry'].copy()
+    p2_DM_SEX = pPiB2['GENDER'].copy()
+    
     pFBP1 = pd.read_csv(pFBP1_path)
     pFBP2 = pd.read_csv(pFBP2_path)
     
+   
+    assert pPiB1['ID'].equals(pFBP1['ID'])
+    # assert pPiB2['ID'].equals(pFBP2['ID'])
+    
     pWeight, uWeight = get_vox_weight()
 
-    # read CL
+    # CL
     uPiB_CL = pd.concat([uPiB1_CL['CL'], uPiB2_CL['CL'], uPiB3_CL['CL'], uPiB4_CL['CL'], uPiB5_CL['CL']], axis=0)
     uFBP_CL = uFBP_CL['CL']
-    pPiB_CL = pd.concat([p_CL['PIB_CL'],p_O_PIB_CL['CL']], axis=0)
-    pFBP_CL = pd.concat([p_CL['FBP_CL'],p_O_FBP_CL['FBP_CL']], axis=0)
+    pPiB_CL = pd.concat([p_CL['PIB_CL'], p_O_PIB_CL['CL']], axis=0)
+    pFBP_CL = pd.concat([p_CL['FBP_CL'], p_O_FBP_CL['FBP_CL']], axis=0)
+    
+    # Demo 
+    uPiB_DM_AGE = pd.concat([uPiB1_DM_AGE, uPiB2_DM_AGE, uPiB3_DM_AGE, uPiB4_DM_AGE, uPiB5_DM_AGE], axis=0)
+    uPiB_DM_SEX = pd.concat([uPiB1_DM_SEX, uPiB2_DM_SEX, uPiB3_DM_SEX, uPiB4_DM_SEX, uPiB5_DM_SEX], axis=0)
+    p_DM_AGE = pd.concat([p1_DM_AGE, p2_DM_AGE], axis=0)
+    p_DM_SEX = pd.concat([p1_DM_SEX, p2_DM_SEX], axis=0)
+    
+    MAX_AGE = max(max(uPiB_DM_AGE.values), max(uFBP_DM_AGE.values), max(p_DM_AGE.values))
+    uPiB_DM_AGE = uPiB_DM_AGE/MAX_AGE
+    uFBP_DM_AGE = uFBP_DM_AGE/MAX_AGE
+    p_DM_AGE = p_DM_AGE/MAX_AGE
+    
         
     # remove ID column and other columns that are not needed
     uPiB1 = uPiB1.iloc[:, 1:90]
@@ -251,13 +237,20 @@ def read_data(normalize=False):
     pPiB = pd.concat([pPiB1, pPiB2], axis=0)
     pFBP = pd.concat([pFBP1, pFBP2], axis=0)
     
-    # # adding CL to unpaired dataset
-    # uPiB = pd.concat([uPiB, uPiB_CL/uPiB_CL.max()], axis=1)
-    # uFBP = pd.concat([uFBP, uFBP_CL/uFBP_CL.max()], axis=1)
-    # pPiB = pd.concat([pPiB, p_CL['PIB_CL']/p_CL['PIB_CL'].max()], axis=1)
-    # pFBP = pd.concat([pFBP, p_CL['FBP_CL']/p_CL['FBP_CL'].max()], axis=1)
+    # adding CL
+    if adding_CL:
+        uPiB = pd.concat([uPiB, uPiB_CL/uPiB_CL.max()], axis=1)
+        uFBP = pd.concat([uFBP, uFBP_CL/uFBP_CL.max()], axis=1)
+        pPiB = pd.concat([pPiB, pPiB_CL/uPiB_CL.max()], axis=1)
+        pFBP = pd.concat([pFBP, pFBP_CL/uFBP_CL.max()], axis=1)
     
-        
+    # adding Demo
+    if adding_demo:
+        uPiB = pd.concat([uPiB, uPiB_DM_AGE, uPiB_DM_SEX], axis=1)
+        uFBP = pd.concat([uFBP, uFBP_DM_AGE, uFBP_DM_SEX], axis=1)
+        pPiB = pd.concat([pPiB, p_DM_AGE, p_DM_SEX], axis=1)
+        pFBP = pd.concat([pFBP, p_DM_AGE, p_DM_SEX], axis=1)
+    
     # Drop columns with only one unique value
     names = []
     for i, name in enumerate(uFBP.columns):
@@ -399,10 +392,33 @@ def get_data_loaders(uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, pWeight, uWeight,
     
     pPiB1 = torch.from_numpy(pPiB[:46]).float()
     pFBP1 = torch.from_numpy(pFBP[:46]).float()
+    pWeight1 = torch.from_numpy(pWeight[:46]).float()
+    
     pPiB2 = torch.from_numpy(pPiB[46:]).float()
     pFBP2 = torch.from_numpy(pFBP[46:]).float()
-    pWeight1 = torch.from_numpy(pWeight[:46]).float()
     pWeight2 = torch.from_numpy(pWeight[46:]).float()
+    
+    # pPiB2 = pPiB[46:]
+    # pFBP2 = pFBP[46:]
+    # pWeight2 = pWeight[46:]
+    
+    # Compute feature-wise weights
+    # feature_weights = []
+    # for i in range(pFBP2.shape[1]):
+    #     _, p_value = ks_2samp(pPiB2[:,i], pPiB1[:, i])
+    #     feature_weights.append(p_value)  # Higher p-value = better match
+
+    # feature_weights = np.array(feature_weights) / np.sum(feature_weights)
+
+    # # Compute sample-wise weights
+    # sample_weights = np.dot(pPiB2, feature_weights)
+    # sample_weights /= sample_weights.sum()
+
+    # # Resample
+    # resampled_idx = np.random.choice(list(range(113)), size=100, replace=False, p=sample_weights)
+    # pPiB2 = torch.from_numpy(pPiB2[resampled_idx]).float()
+    # pFBP2 = torch.from_numpy(pFBP2[resampled_idx]).float()
+    # pWeight2 = torch.from_numpy(pWeight2[resampled_idx]).float()
     
     unpaired_dataset = UnpairedDataset(uFBP, uPiB, uPiB_CL, uFBP_CL, uWeight, resample=resample)
     unpaired_loader = DataLoader(unpaired_dataset, batch_size=batch_size_u, shuffle=shuffle)
@@ -420,4 +436,18 @@ if __name__ == "__main__":
     print(uPiB.shape, uFBP.shape, pPiB.shape, pFBP.shape)
     print(uPiB_CL.shape, uFBP_CL.shape)
     print(pWeight.shape, uWeight.shape)
+    
+   # chekc nan
+   
+    print(np.isnan(uPiB).any())
+    print(np.isnan(uFBP).any())
+    print(np.isnan(pPiB).any())
+    print(np.isnan(pFBP).any())
+    print(np.isnan(uPiB_CL).any())
+    print(np.isnan(uFBP_CL).any())
+    print(np.isnan(pPiB_CL).any())
+    print(np.isnan(pFBP_CL).any())
+    print(np.isnan(pWeight).any())
+    print(np.isnan(uWeight).any())
+    
     

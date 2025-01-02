@@ -53,6 +53,7 @@ parser.add_argument(
 parser.add_argument("--lambda_cyc", type=float, default=10.0, help="cycle loss weight")
 parser.add_argument("--lambda_id", type=float, default=5.0, help="identity loss weight")
 parser.add_argument("--lambda_mc", type=float, default=5.0, help="MCSUVR loss weight")
+
 parser.add_argument(
     "--pool_size",
     type=int,
@@ -97,22 +98,12 @@ parser.add_argument(
     "--log_path", type=str, default="./training_logs3", help="path to save log file"
 )
 
-parser.add_argument("--finetune", type=int, default=0, help="whether finetune model")
-parser.add_argument("--finetune_lr", type=float, default=0.00001, help="finetune lr")
-parser.add_argument(
-    "--model_path", type=str, default="./model", help="path to saved model"
-)
-parser.add_argument(
-    "--data_path", type=str, default="./data", help="path to saved data"
-)
-parser.add_argument(
-    "--max_cor", type=float, default=-1, help="initialization of max correlation"
-)
-
-parser.add_argument("--SUVR", type=int, default=1, help="whether SUVR")
 
 parser.add_argument("--seed", type=int, default=0, help="random seed, default=0")
 parser.add_argument("--shuffle", type=int, default=1, help="shuffle data, default=1")
+parser.add_argument("--add_CL", type=int, default=0, help="add CL to data, default=0")
+parser.add_argument("--add_DM", type=int, default=0, help="add DM to data, default=0")
+parser.add_argument("dim", type=int, default=86, help="input dimension, default=86")
 
 
 opt = parser.parse_args()
@@ -137,11 +128,12 @@ def save_model(model_save_path, suffix):
     torch.save(D_A.state_dict(), model_save_path / f"D_A_{suffix}.pth")
     torch.save(D_B.state_dict(), model_save_path / f"D_B_{suffix}.pth")
 
+
 def sample(
-    paired_val, # OASIS
-    paired_test, # C
+    paired_val,  # OASIS
+    paired_test,  # C
 ):
-    """Saves a generated sample from the test set"""
+    """Check mcSUVR and correlation on validation and test set"""
 
     MCSUVR_WEIGHT_PAIRED_VAL = paired_val[2]
     MCSUVR_WEIGHT_PAIRED_TEST = paired_test[2]
@@ -183,10 +175,18 @@ def sample(
         )
 
         # calculate relative error
-        error_B_val = torch.mean(torch.abs(fake_B_val - real_B_val) / (real_B_val + 1e-8))
-        error_B_test = torch.mean(torch.abs(fake_B_test - real_B_test) / (real_B_test + 1e-8))
-        error_A_val = torch.mean(torch.abs(fake_A_val - real_A_val) / (real_A_val + 1e-8))
-        error_A_test = torch.mean(torch.abs(fake_A_test - real_A_test) / (real_A_test + 1e-8))
+        error_B_val = torch.mean(
+            torch.abs((fake_B_val - real_B_val) / (real_B_val + 1e-8))
+        )
+        error_B_test = torch.mean(
+            torch.abs((fake_B_test - real_B_test) / (real_B_test + 1e-8))
+        )
+        error_A_val = torch.mean(
+            torch.abs((fake_A_val - real_A_val) / (real_A_val + 1e-8))
+        )
+        error_A_test = torch.mean(
+            torch.abs((fake_A_test - real_A_test) / (real_A_test + 1e-8))
+        )
 
     return (
         error_A_val,
@@ -232,7 +232,6 @@ def sample(
 # path
 log_path = Path(opt.log_path)
 training_setup = f"{opt.generator_width}_{opt.discriminator_width}_{opt.num_residual_blocks_generator}_{opt.num_residual_blocks_discriminator}_{opt.lambda_cyc}_{opt.lambda_id}_{opt.lambda_mc}"
-
 log_setup_path = log_path / "log" / training_setup
 model_save_path = log_path / "saved_model" / training_setup
 data_save_path = log_path / "data" / training_setup
@@ -263,7 +262,7 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 logger.info("Training started")
 
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# CPU is enough for this task
 device = "cpu"
 
 # Losses
@@ -275,8 +274,15 @@ criterion_identity = torch.nn.L1Loss()
 criterion_MCSUVR = torch.nn.MSELoss()
 # criterion_MCSUVR = torch.nn.L1Loss()
 
-input_dim = 85
-latent_dim = 85
+
+if opt.add_CL:
+    opt.dim += 1
+
+if opt.add_DM:
+    opt.dim += 1
+
+input_dim, latent_dim = opt.dim, opt.dim
+
 # Initialize generator and discriminator
 G_AB = Generater_MLP_Skip(
     input_dim, opt.generator_width, latent_dim, opt.num_residual_blocks_generator
@@ -284,7 +290,6 @@ G_AB = Generater_MLP_Skip(
 G_BA = Generater_MLP_Skip(
     input_dim, opt.generator_width, latent_dim, opt.num_residual_blocks_generator
 )
-
 D_A = PatchMLPDiscriminator_1D_Res(
     opt.num_patch,
     patch_size=opt.patch_size,
@@ -297,23 +302,6 @@ D_B = PatchMLPDiscriminator_1D_Res(
     hidden_size=opt.discriminator_width,
     num_residual_blocks=opt.num_residual_blocks_discriminator,
 )
-
-# if opt.finetune == 1:
-#     logger.info(f"Finetune model from saved model {opt.model_path}")
-#     model_path = Path(opt.model_path)
-#     G_AB.load_state_dict(torch.load(model_path / "G_AB_Best_Cor.pth"))
-#     G_BA.load_state_dict(torch.load(model_path / "G_BA_Best_Cor.pth"))
-#     D_A.load_state_dict(torch.load(model_path / "D_A_Best_Cor.pth"))
-#     D_B.load_state_dict(torch.load(model_path / "D_B_Best_Cor.pth"))
-
-#     opt.lr = opt.finetune_lr
-#     # data_path = Path(opt.data_path)
-#     # fake_PiB_nft = torch.load(data_path/'fake_B_Best.pt')
-#     fake_PiB_nft = None
-# else:
-#     fake_PiB_nft = None
-
-
 G_AB = G_AB.to(device)
 G_BA = G_BA.to(device)
 D_A = D_A.to(device)
@@ -353,7 +341,7 @@ lr_scheduler_D_B = CosineAnnealingLR_with_Restart_WeightDecay(
     uFBP_scaler,
     pWeight,
     uWeight,
-) = read_data(normalize=False)
+) = read_data(normalize=False, adding_CL=opt.add_CL, adding_DM=opt.add_DM)
 
 
 # ----------
@@ -391,8 +379,10 @@ for epoch in range(opt.epoch, opt.n_epochs):
         resample=resample[opt.resample],
         shuffle=opt.shuffle,
     )
-    logger.info(f"paired_test: {paired_test[0].shape}, paired_val: {paired_val[0].shape}")
-    
+    logger.info(
+        f"paired_test: {paired_test[0].shape}, paired_val: {paired_val[0].shape}"
+    )
+
     for i, batch in enumerate(unpaired_loader):
 
         # Set model input
@@ -493,21 +483,18 @@ for epoch in range(opt.epoch, opt.n_epochs):
                 fake_B_val,
                 fake_A_test,
                 fake_B_test,
-            ) = sample(
-                paired_val,
-                paired_test
-            )
+            ) = sample(paired_val, paired_test)
 
             # Save two models, i.e., best correlation and best error
             if cor_B_val > max_cor_B_val:
                 max_cor_B_val = cor_B_val
                 max_cor_B_test = cor_B_test
-                
+
                 max_cor_B_error_B_val = error_B_val
                 max_cor_B_error_A_val = error_A_val
                 max_cor_B_error_B_test = error_B_test
                 max_cor_B_error_A_test = error_A_test
-                
+
                 # save tensors
                 torch.save(fake_B_val, f"./{data_save_path}/fake_B_val_Best_Cor.pt")
                 torch.save(fake_B_test, f"./{data_save_path}/fake_B_test_Best_Cor.pt")
@@ -522,14 +509,18 @@ for epoch in range(opt.epoch, opt.n_epochs):
 
                 if not opt.finetune:
                     # save tensors
-                    torch.save(fake_B_val, f"./{data_save_path}/fake_B_Best_MinB_val.pt")
-                    torch.save(fake_B_test, f"./{data_save_path}/fake_B_Best_MinB_test.pt")
+                    torch.save(
+                        fake_B_val, f"./{data_save_path}/fake_B_Best_MinB_val.pt"
+                    )
+                    torch.save(
+                        fake_B_test, f"./{data_save_path}/fake_B_Best_MinB_test.pt"
+                    )
                     # save model
                     save_model(model_save_path, "Best_MinB")
 
             logger.info("+" * 30)
             logger.info(
-                f"Epoch: {epoch}, Batch: {i}, D loss: {loss_D.item():.4f}, G loss: {loss_G.item():.4f}, adv: {loss_GAN.item():.4f}, cycle: {loss_cycle.item():.4f}, identity: {loss_identity.item():.4f}, cor_B: {cor_B_val:.4f} "
+                f"Epoch: {epoch}, Batch: {i}, D loss: {loss_D.item():.4f}, G loss: {loss_G.item():.4f}, adv: {loss_GAN.item():.4f}, cycle: {loss_cycle.item():.4f}, identity: {loss_identity.item():.4f}, cor_B: {cor_B_val:.4f}, error_B: {error_B_val:.4f}"
             )
             logger.info("-" * 30)
             # make them have same space

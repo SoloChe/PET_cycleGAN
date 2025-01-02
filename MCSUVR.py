@@ -107,7 +107,7 @@ def load_weights(separate=False):
     return region_index
 
 
-def cal_MCSUVR_torch(data, region_to_index, weight, separate=False, mask=None):
+def cal_MCSUVR_torch(data, region_to_index, weight, separate=False):
     
     # ctx_precuneus_w = torch.from_numpy(weight['ctx-precuneus'].values)
     # ctx_rostralmiddlefrontal_w = torch.from_numpy(weight['ctx-rostralmiddlefrontal'].values)
@@ -170,7 +170,7 @@ def cal_MCSUVR_torch(data, region_to_index, weight, separate=False, mask=None):
         GR = (ctx_lateralorbitofrontal_w * (data[:, idx_ctx_lateralorbitofrontal_right]+data[:, idx_ctx_lateralorbitofrontal_left])/2 + ctx_medialorbitofrontal_w * (data[:, idx_ctx_medialorbitofrontal_right]+data[:, idx_ctx_medialorbitofrontal_left])/2) / (ctx_lateralorbitofrontal_w + ctx_medialorbitofrontal_w + 1e-8)
         MCSUVR = (PREC + PREF + TEMP + GR) / 4
         
-    return MCSUVR if mask is None else MCSUVR[mask]
+    return MCSUVR 
 
 #%% correlation between real and fake MCSUVR
 def cal_correlation(X, Y):

@@ -20,13 +20,13 @@ source activate torch_base
 
 for resample in 1
 do
-    for generator_width in 180 200 220
+    for generator_width in 200 220
     do
         for num_residual_blocks_generator in 4
         do
-            for discriminator_width in 200 220 240
+            for discriminator_width in 220 240
             do
-                for num_residual_blocks_discriminator in 4 5
+                for num_residual_blocks_discriminator in 5
                 do
                     for lambda_cyc in 10 
                     do
@@ -35,14 +35,21 @@ do
                             for lambda_mc in 0
                             do
                                 for seed in 30
-                                do
-                                    patch_size=85
+                                do  
+                                    # patch discriminator
+                                    patch_size=88
                                     num_patch=1
 
+                                    # batch size and pool size for buffer
                                     batch_size=10
                                     pool_size=500
 
-                                    ~/.conda/envs/torch_base/bin/python main.py --resample $resample --generator_width $generator_width --num_residual_blocks_generator $num_residual_blocks_generator --discriminator_width $discriminator_width --num_residual_blocks_discriminator $num_residual_blocks_discriminator --lambda_cyc $lambda_cyc --lambda_id $lambda_id --lambda_mc $lambda_mc --log_path ./logs_new_${resample}_batch_${batch_size}_pool_${pool_size}_patch_${patch_size}_${num_patch}_${seed} --lr 0.0002 --decay_epoch 100 --n_epochs 700  --sample_interval 10 --batch_size $batch_size --pool_size $pool_size --patch_size $patch_size --num_patch $num_patch --SUVR 1 --seed $seed
+                                    # adding cl or dm
+                                    adding_cl=0
+                                    adding_dm=0
+
+
+                                    ~/.conda/envs/torch_base/bin/python main.py --resample $resample --generator_width $generator_width --num_residual_blocks_generator $num_residual_blocks_generator --discriminator_width $discriminator_width --num_residual_blocks_discriminator $num_residual_blocks_discriminator --lambda_cyc $lambda_cyc --lambda_id $lambda_id --lambda_mc $lambda_mc --log_path ./logs_${adding}${adding_dm}${resample}_batch_${batch_size}_pool_${pool_size}_patch_${patch_size}_${num_patch}_${seed} --lr 0.0002 --decay_epoch 100 --n_epochs 700  --sample_interval 10 --batch_size $batch_size --pool_size $pool_size --patch_size $patch_size --num_patch $num_patch --SUVR 1 --seed $seed
                                 done
                             done
                         done

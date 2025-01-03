@@ -8,8 +8,19 @@ import torch
 import numpy as np
 
 from torchvision.utils import save_image
+import argparse
 
-
+#### use this for bool parameter in argparse
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+    
 class ReplayBuffer:
     def __init__(self, max_size=50):
         assert max_size > 0, "Empty buffer or trying to create a black hole. Be careful."
@@ -64,3 +75,5 @@ class CosineAnnealingLR_with_Restart_WeightDecay:
         lr = self.eta_min + (0.5 * (self.eta_max-self.eta_min) * (1 + np.cos(np.pi * self.T_cur / self.T_max)))
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = lr
+            
+

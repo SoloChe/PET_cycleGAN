@@ -97,7 +97,6 @@ def read_data(normalize=False, adding_CL=False, adding_demo=False):
     adni_demo = pd.read_excel(file_path + '/ALL-AV45-PUP-BAI-SUVR-11162023.xlsx', sheet_name='Demo')[['PUP ID', 'Age at AV45 Scan', 'Gender']]
     paired_demo = pd.read_excel('/home/yche14/PET_cycleGAN/data_PET/demo/FBP-PIB_Demographics_Centiloid.xlsx', sheet_name='Sheet1')[['ID', 'Age', 'Sex']]
     
-    # be fucking consistent, please...
     clpib_demo.loc[clpib_demo['Sex'] == 'Female', 'Sex'] = 2
     clpib_demo.loc[clpib_demo['Sex'] == 'F', 'Sex'] = 2
     clpib_demo.loc[clpib_demo['Sex'] == 'Male', 'Sex'] = 1

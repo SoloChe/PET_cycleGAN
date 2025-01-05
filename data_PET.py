@@ -43,7 +43,7 @@ def get_vox_weight():
         
     
     
-def read_data(normalize=False, adding_CL=False, adding_demo=False):
+def read_data(normalize=False, adding_CL=False, adding_DM=False):
     
     # non sep. SUVR dataset
     uPiB1_path = '/home/yche14/PET_cycleGAN/data_PET/unpaired/standard/PIB/AIBL_PIB_PUP.xlsx'
@@ -244,7 +244,7 @@ def read_data(normalize=False, adding_CL=False, adding_demo=False):
         pFBP = pd.concat([pFBP, pFBP_CL/uFBP_CL.max()], axis=1)
     
     # adding Demo
-    if adding_demo:
+    if adding_DM:
         uPiB = pd.concat([uPiB, uPiB_DM_AGE, uPiB_DM_SEX], axis=1)
         uFBP = pd.concat([uFBP, uFBP_DM_AGE, uFBP_DM_SEX], axis=1)
         pPiB = pd.concat([pPiB, p_DM_AGE, p_DM_SEX], axis=1)

@@ -43,7 +43,7 @@ def get_vox_weight():
         
     
     
-def read_data(normalize=False, adding_CL=False, adding_DM=False):
+def read_data(normalize=False, adding_CL=False, adding_DM=False, ret_feat=False):
     
     # non sep. SUVR dataset
     uPiB1_path = '/home/yche14/PET_cycleGAN/data_PET/unpaired/standard/PIB/AIBL_PIB_PUP.xlsx'
@@ -218,7 +218,7 @@ def read_data(normalize=False, adding_CL=False, adding_DM=False):
     uFBP_DM_AGE = uFBP_DM_AGE/MAX_AGE
     p_DM_AGE = p_DM_AGE/MAX_AGE
     
-        
+    
     # remove ID column and other columns that are not needed
     uPiB1 = uPiB1.iloc[:, 1:90]
     uPiB2 = uPiB2.iloc[:, 1:90]
@@ -226,11 +226,20 @@ def read_data(normalize=False, adding_CL=False, adding_DM=False):
     uPiB4 = uPiB4.iloc[:, 1:90]
     uPiB5 = uPiB5.iloc[:, 1:90]
     
+    
+    
     uFBP = uFBP.iloc[:, 1:90]
     pPiB1 = pPiB1.iloc[:, 1:90]
     pPiB2 = pPiB2.iloc[:, 1:90]
     pFBP1 = pFBP1.iloc[:, 1:90]
     pFBP2 = pFBP2.iloc[:, 1:90]
+    
+    # check if columns are same
+    assert pPiB1.columns.equals(pPiB2.columns)
+    assert pPiB1.columns.equals(pFBP1.columns)
+    assert pPiB2.columns.equals(pFBP2.columns)
+    
+    features_list = uPiB1.columns
    
     uPiB = pd.concat([uPiB1, uPiB2, uPiB3, uPiB4, uPiB5], axis=0)
     pPiB = pd.concat([pPiB1, pPiB2], axis=0)
@@ -306,7 +315,8 @@ def read_data(normalize=False, adding_CL=False, adding_DM=False):
     #     uPiB1_CL_baseline = uPiB1_CL[uPiB1_CL['SID'].isin(uPiB1['ID'])]
     #     uPiB2_CL_baseline = uPiB2_CL[uPiB2_CL['PIB_ID'].isin(uPiB2['ID'])]
     #     uPiB_CL = pd.concat([uPiB1_CL_baseline['CL'], uPiB2_CL_baseline['CL']])
-        
+    if ret_feat:
+        return uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, pPiB_CL, pFBP_CL, uPiB_scaler, uFBP_scaler, pWeight, uWeight, features_list
     return uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, pPiB_CL, pFBP_CL, uPiB_scaler, uFBP_scaler, pWeight, uWeight
     
     

@@ -103,7 +103,7 @@ parser.add_argument("--seed", type=int, default=0, help="random seed, default=0"
 parser.add_argument("--shuffle", type=str2bool, default=True, help="shuffle data, default=1")
 parser.add_argument("--add_CL", type=str2bool, default=False, help="add CL to data, default=0")
 parser.add_argument("--add_DM", type=str2bool, default=False, help="add DM to data, default=0")
-parser.add_argument("--dim", type=int, default=86, help="input dimension, default=86")
+parser.add_argument("--dim", type=int, default=85, help="input dimension, default=86")
 
 
 opt = parser.parse_args()
@@ -279,7 +279,7 @@ if opt.add_CL:
     opt.dim += 1
 
 if opt.add_DM:
-    opt.dim += 1
+    opt.dim += 2
 
 input_dim, latent_dim = opt.dim, opt.dim
 
@@ -347,7 +347,7 @@ lr_scheduler_D_B = CosineAnnealingLR_with_Restart_WeightDecay(
 # ----------
 #  Training
 # ----------
-max_cor_B_val = opt.max_cor
+max_cor_B_val = 0
 min_error_B_val = 100
 
 # pool

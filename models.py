@@ -99,7 +99,8 @@ class Generater_MLP_Skip(nn.Module):
         self.input_layer = nn.Linear(input_size, hidden_size)
         self.residual_blocks = nn.ModuleList([MLPResidualBlock(hidden_size) for _ in range(num_residual_blocks)])
         self.output_layer = nn.Linear(hidden_size, output_size)
-        self.activation = nn.LeakyReLU(0.2)
+        # self.activation = nn.LeakyReLU(0.2)
+        self.activation = nn.Tanh()
         self.apply(weights_init_normal)
         
     def forward(self, x):
@@ -186,7 +187,8 @@ class PatchMLPDiscriminator_1D_Res(nn.Module):
         
         # Initial linear layer to map patch_size to hidden_size
         self.input_layer = nn.Linear(patch_size, hidden_size)
-        self.activation = nn.LeakyReLU(0.2)
+        # self.activation = nn.LeakyReLU(0.2)
+        self.activation = nn.Tanh()
         
         # Residual blocks for each patch
         self.residual_blocks = nn.Sequential(

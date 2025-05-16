@@ -4,19 +4,13 @@ import numpy as np
 import itertools
 import random
 
-import pandas as pd
 from models import *
 from utils import *
 
 # from data import get_data_loaders, get_unpaired_blood
-from data_PET import get_data_loaders, read_data
-from MCSUVR import load_weights, cal_MCSUVR_torch, cal_correlation
-
-# from model1D_new import define_G
-# from pool import ImagePool
-
+from MCSUVR import cal_correlation
+from data_PET_test import cal_MCSUVR_torch, read_data, get_data_loaders
 import torch
-from sklearn.linear_model import LinearRegression
 import logging
 
 parser = argparse.ArgumentParser()
@@ -75,7 +69,6 @@ parser.add_argument(
 
 parser.add_argument("--baseline", type=int, default=0, help="whether baseline model")
 
-parser.add_argument("--resample", type=int, default=0, help="resample unpaired data")
 parser.add_argument(
     "--generator_width", type=int, default=512, help="width of the generator"
 )
@@ -101,8 +94,6 @@ parser.add_argument(
 # DATA
 parser.add_argument("--seed", type=int, default=0, help="random seed, default=0")
 parser.add_argument("--shuffle", type=str2bool, default=True, help="shuffle data, default=1")
-parser.add_argument("--add_CL", type=str2bool, default=False, help="add CL to data, default=0")
-parser.add_argument("--add_DM", type=str2bool, default=False, help="add DM to data, default=0")
 parser.add_argument("--dim", type=int, default=85, help="input dimension, default=86")
 
 
@@ -116,10 +107,6 @@ random.seed(opt.seed)
 # Ensure deterministic behavior in PyTorch
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
-
-######################
-REGION_INDEX = load_weights()
-######################
 
 
 def save_model(model_save_path, suffix):
@@ -135,12 +122,9 @@ def sample(
 ):
     """Check mcSUVR and correlation on validation and test set"""
 
-    MCSUVR_WEIGHT_PAIRED_VAL = paired_val[2]
-    MCSUVR_WEIGHT_PAIRED_TEST = paired_test[2]
-
     G_AB.eval()
     G_BA.eval()
-
+    
     with torch.no_grad():
         real_A_val = paired_val[0].to(device)  # FBP
         real_B_val = paired_val[1].to(device)  # PiB
@@ -151,13 +135,14 @@ def sample(
         real_B_test = paired_test[1].to(device)  # PiB
         fake_B_test = G_AB(real_A_test)  # Fake PiB
         fake_A_test = G_BA(fake_B_test)  # Fake FBP
-
+        
+        
         # PiB val
         REAL_MCSUVR_B_VAL = cal_MCSUVR_torch(
-            real_B_val, REGION_INDEX, MCSUVR_WEIGHT_PAIRED_VAL
+            real_B_val
         )
         FAKE_MCSUVR_B_val = cal_MCSUVR_torch(
-            fake_B_val, REGION_INDEX, MCSUVR_WEIGHT_PAIRED_VAL
+            fake_B_val
         )
         cor_B_val = cal_correlation(
             REAL_MCSUVR_B_VAL.cpu().numpy(), FAKE_MCSUVR_B_val.cpu().numpy()
@@ -165,11 +150,13 @@ def sample(
 
         # PiB test
         REAL_MCSUVR_B_TEST = cal_MCSUVR_torch(
-            real_B_test, REGION_INDEX, MCSUVR_WEIGHT_PAIRED_TEST
+            real_B_test
         )
         FAKE_MCSUVR_B_TEST = cal_MCSUVR_torch(
-            fake_B_test, REGION_INDEX, MCSUVR_WEIGHT_PAIRED_TEST
+            fake_B_test
         )
+        
+        
         cor_B_test = cal_correlation(
             REAL_MCSUVR_B_TEST.cpu().numpy(), FAKE_MCSUVR_B_TEST.cpu().numpy()
         )
@@ -247,13 +234,6 @@ criterion_identity = torch.nn.L1Loss()
 criterion_MCSUVR = torch.nn.MSELoss()
 # criterion_MCSUVR = torch.nn.L1Loss()
 
-
-if opt.add_CL:
-    opt.dim += 1
-
-if opt.add_DM:
-    opt.dim += 2
-
 input_dim, latent_dim = opt.dim, opt.dim
 
 # Initialize generator and discriminator
@@ -300,21 +280,6 @@ lr_scheduler_D_B = CosineAnnealingLR_with_Restart_WeightDecay(
     optimizer_D_B, T_max=5, T_mult=2, eta_min=0.00001, eta_max=opt.lr, decay=0.8
 )
 
-# read all data
-(
-    uPiB,
-    uFBP,
-    pPiB,
-    pFBP,
-    uPiB_CL,
-    uFBP_CL,
-    pPiB_CL,
-    pFBP_CL,
-    uPiB_scaler,
-    uFBP_scaler,
-    pWeight,
-    uWeight,
-) = read_data(normalize=False, adding_CL=opt.add_CL, adding_DM=opt.add_DM)
 
 
 # ----------
@@ -328,31 +293,14 @@ min_error_B_val = float("inf")
 fake_A_pool = ReplayBuffer(opt.pool_size)
 fake_B_pool = ReplayBuffer(opt.pool_size)
 
-resample = {
-    0: False,
-    1: "matching",
-    2: "resample_to_n",
-    3: "resample_tail",
-    4: "resample_CL_threshold",
-}
+paired_test, paired_val, unpaired_loader = get_data_loaders(
+        opt.batch_size
+    )
+
+print(paired_test[1].shape)
 
 for epoch in range(opt.epoch, opt.n_epochs):
-
-    # data loader
-    # resample for each epoch
-    paired_test, paired_val, unpaired_loader = get_data_loaders(
-        uPiB,
-        uFBP,
-        pPiB,
-        pFBP,
-        uPiB_CL,
-        uFBP_CL,
-        pWeight,
-        uWeight,
-        opt.batch_size,
-        resample=resample[opt.resample],
-        shuffle=opt.shuffle,
-    )
+   
     logger.info(
         f"paired_test: {paired_test[0].shape}, paired_val: {paired_val[0].shape}"
     )
@@ -362,7 +310,6 @@ for epoch in range(opt.epoch, opt.n_epochs):
         # Set model input
         real_A = batch[0].to(device)
         real_B = batch[1].to(device)
-        uW = batch[2].to(device)
 
         # ------------------
         #  Train Generators
@@ -391,18 +338,11 @@ for epoch in range(opt.epoch, opt.n_epochs):
         loss_cycle_B = criterion_cycle(recov_B, real_B)
         loss_cycle = (loss_cycle_A + loss_cycle_B) / 2
 
-        # MCSUVR loss
-        # if opt.lambda_mc > 0:
-        #     loss_MCSUVR = MCSUVR_Loss(recov_B, real_B, uW)
-        #     # loss_MCSUVR = MCSUVR_Loss(recov_B, uW)
-        #     # loss_MCSUVR = MCSUVR_Loss2(fake_B)
-        # else:
-        #     loss_MCSUVR = torch.tensor([0])
 
         # Total loss
         loss_G = (
             loss_GAN + opt.lambda_cyc * loss_cycle + opt.lambda_id * loss_identity
-        )  # + opt.lambda_mc * loss_MCSUVR
+        )  
         loss_G.backward()
         optimizer_G.step()
 

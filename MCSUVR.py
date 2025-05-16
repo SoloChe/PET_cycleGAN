@@ -77,7 +77,7 @@ def load_weights(separate=False):
     # weight_paired[col_name] = val_paired
     # weight_unpaied[col_name] = val_unpaired
     
-    regions = {'PREC':['ctx-precuneus'], 'PREF':['ctx-rostralmiddlefrontal', 'ctx-superiorfrontal'], 'TEMP':['ctx-middletemporal', 'ctx-superiortemporal'], 'GR':['ctx-lateralorbitofrontal', 'ctx-medialorbitofrontal']}
+    # regions = {'PREC':['ctx-precuneus'], 'PREF':['ctx-rostralmiddlefrontal', 'ctx-superiorfrontal'], 'TEMP':['ctx-middletemporal', 'ctx-superiortemporal'], 'GR':['ctx-lateralorbitofrontal', 'ctx-medialorbitofrontal']}
     
     if not separate:
         region_index = {'ctx-precuneus':39, 

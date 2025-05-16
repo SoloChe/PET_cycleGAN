@@ -214,10 +214,7 @@ def read_data(normalize=False, adding_CL=False, adding_DM=False, ret_feat=False)
     p_DM_SEX = pd.concat([p1_DM_SEX, p2_DM_SEX], axis=0)
     
     MAX_AGE = max(max(uPiB_DM_AGE.values), max(uFBP_DM_AGE.values), max(p_DM_AGE.values))
-    uPiB_DM_AGE = uPiB_DM_AGE/MAX_AGE
-    uFBP_DM_AGE = uFBP_DM_AGE/MAX_AGE
-    p_DM_AGE = p_DM_AGE/MAX_AGE
-    
+    print('MAX_AGE:', MAX_AGE)
     
     # remove ID column and other columns that are not needed
     uPiB1 = uPiB1.iloc[:, 1:90]
@@ -225,10 +222,8 @@ def read_data(normalize=False, adding_CL=False, adding_DM=False, ret_feat=False)
     uPiB3 = uPiB3.iloc[:, 1:90]
     uPiB4 = uPiB4.iloc[:, 1:90]
     uPiB5 = uPiB5.iloc[:, 1:90]
-    
-    
-    
     uFBP = uFBP.iloc[:, 1:90]
+    
     pPiB1 = pPiB1.iloc[:, 1:90]
     pPiB2 = pPiB2.iloc[:, 1:90]
     pFBP1 = pFBP1.iloc[:, 1:90]
@@ -251,13 +246,16 @@ def read_data(normalize=False, adding_CL=False, adding_DM=False, ret_feat=False)
         uFBP = pd.concat([uFBP, uFBP_CL/uFBP_CL.max()], axis=1)
         pPiB = pd.concat([pPiB, pPiB_CL/uPiB_CL.max()], axis=1)
         pFBP = pd.concat([pFBP, pFBP_CL/uFBP_CL.max()], axis=1)
-    
+        
+      
     # adding Demo
     if adding_DM:
-        uPiB = pd.concat([uPiB, uPiB_DM_AGE, uPiB_DM_SEX], axis=1)
-        uFBP = pd.concat([uFBP, uFBP_DM_AGE, uFBP_DM_SEX], axis=1)
-        pPiB = pd.concat([pPiB, p_DM_AGE, p_DM_SEX], axis=1)
-        pFBP = pd.concat([pFBP, p_DM_AGE, p_DM_SEX], axis=1)
+        uPiB = pd.concat([uPiB, uPiB_DM_AGE/MAX_AGE, uPiB_DM_SEX], axis=1)
+        uFBP = pd.concat([uFBP, uFBP_DM_AGE/MAX_AGE, uFBP_DM_SEX], axis=1)
+        pPiB = pd.concat([pPiB, p_DM_AGE/MAX_AGE, p_DM_SEX], axis=1)
+        pFBP = pd.concat([pFBP, p_DM_AGE/MAX_AGE, p_DM_SEX], axis=1)
+        
+      
     
     # Drop columns with only one unique value
     names = []
@@ -316,7 +314,7 @@ def read_data(normalize=False, adding_CL=False, adding_DM=False, ret_feat=False)
     #     uPiB2_CL_baseline = uPiB2_CL[uPiB2_CL['PIB_ID'].isin(uPiB2['ID'])]
     #     uPiB_CL = pd.concat([uPiB1_CL_baseline['CL'], uPiB2_CL_baseline['CL']])
     if ret_feat:
-        return uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, pPiB_CL, pFBP_CL, uPiB_scaler, uFBP_scaler, pWeight, uWeight, features_list
+        return uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, pPiB_CL, pFBP_CL, uPiB_scaler, uFBP_scaler, pWeight, uWeight, features_list, uFBP_DM_AGE, uPiB_DM_AGE, uFBP_DM_SEX, uPiB_DM_SEX, p_DM_AGE, p_DM_SEX
     return uPiB, uFBP, pPiB, pFBP, uPiB_CL, uFBP_CL, pPiB_CL, pFBP_CL, uPiB_scaler, uFBP_scaler, pWeight, uWeight
     
     

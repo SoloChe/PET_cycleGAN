@@ -22,6 +22,7 @@ parser.add_argument(
     "--dataset_name", type=str, default="PET", help="name of the dataset"
 )
 parser.add_argument("--batch_size", type=int, default=128, help="size of the batches")
+parser.add_argument("--train_size", type=int, default=1000, help="train size")
 parser.add_argument("--lr", type=float, default=0.0002, help="adam: learning rate")
 parser.add_argument(
     "--b1",
@@ -98,7 +99,7 @@ parser.add_argument("--dim", type=int, default=85, help="input dimension, defaul
 
 
 opt = parser.parse_args()
-print(opt)
+
 
 # set random seed
 torch.manual_seed(opt.seed)
@@ -222,6 +223,10 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 logger.info("Training started")
 
+logger.info(
+    f"Training setup: {opt}"
+)
+
 # CPU is enough for this task
 device = "cpu"
 
@@ -293,18 +298,14 @@ min_error_B_val = float("inf")
 fake_A_pool = ReplayBuffer(opt.pool_size)
 fake_B_pool = ReplayBuffer(opt.pool_size)
 
-paired_test, paired_val, unpaired_loader = get_data_loaders(
-        opt.batch_size
+paired_test, paired_val, unpaired_loader, unpaired_train = get_data_loaders(
+        opt.batch_size, opt.train_size
     )
-
-print(paired_test[1].shape)
+torch.save(paired_test, f"./{data_save_path}/paired_test_data.pt")
+torch.save(unpaired_train, f"./{data_save_path}/unpaired_train_data.pt")
 
 for epoch in range(opt.epoch, opt.n_epochs):
    
-    logger.info(
-        f"paired_test: {paired_test[0].shape}, paired_val: {paired_val[0].shape}"
-    )
-
     for i, batch in enumerate(unpaired_loader):
 
         # Set model input
